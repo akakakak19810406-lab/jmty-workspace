@@ -1,0 +1,1 @@
+../../.agent/skills/jmty/jmty-posts-12-variants/SKILL.md

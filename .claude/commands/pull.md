@@ -1,0 +1,5 @@
+この command は JMTY workspace 専用です。
+まずカレントディレクトリに AGENTS.md があることを確認し、その内容を正本として扱ってください。
+AGENTS.md を読み、/pull のルールを確認してください。
+git fetch origin の後、更新がある場合だけ pull --rebase を行ってください。
+ユーザーが追加の引数や補足を付けた場合は、それも考慮してください: $ARGUMENTS

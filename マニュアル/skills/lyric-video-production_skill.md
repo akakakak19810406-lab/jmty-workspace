@@ -1,0 +1,1 @@
+../../.agent/skills/remotion/lyric-emotion-mapper/SKILL.md

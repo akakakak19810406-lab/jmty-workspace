@@ -1,0 +1,10 @@
+{
+  "name": "jmty_customer_phone_to_1s",
+  "selected_sheet": "form_8：在宅ワーク面談前アンケート",
+  "key_columns": [
+    "uid"
+  ],
+  "exclude_all_blank": true,
+  "target_mode": "existing_column",
+  "target_value": "1S"
+}

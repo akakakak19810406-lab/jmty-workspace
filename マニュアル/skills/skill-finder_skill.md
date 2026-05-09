@@ -1,0 +1,1 @@
+../../.agent/skills/skill-finder/SKILL.md
