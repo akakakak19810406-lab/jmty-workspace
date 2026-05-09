@@ -19,7 +19,7 @@ from runtime_common import (
     clear_owner_machine,
     configure_repo_git_hooks,
     detect_shared_root,
-    ensure_remotion_venv,
+    ensure_skill_venv,
     format_bytes_for_humans,
     get_discord_git_webhook_url,
     get_git_lfs_free_plan_status,
@@ -38,7 +38,7 @@ from runtime_common import (
     mark_worked_before,
     pull_voicevox_engine_image,
     resolve_input_path,
-    run_remotion_python,
+    run_skill_python,
     save_discord_git_webhook_url,
     save_shared_discord_git_webhook_url,
     save_owner_machine,
@@ -102,10 +102,10 @@ def _copy_to_shared(source: Path, shared_root: Path, subpath: str | None) -> Pat
 def _format_shell_export(repo_root: Path, shell_name: str) -> str:
     repo_root_str = str(repo_root)
     if shell_name == "powershell":
-        return f'$env:TEAM_INFO_ROOT = "{repo_root_str}"'
+        return f'$env:JMTY_ROOT = "{repo_root_str}"'
     if shell_name == "cmd":
-        return f"set TEAM_INFO_ROOT={repo_root_str}"
-    return f'export TEAM_INFO_ROOT="{repo_root_str}"'
+        return f"set JMTY_ROOT={repo_root_str}"
+    return f'export JMTY_ROOT="{repo_root_str}"'
 
 
 def _print_git_lfs_free_plan_status(*, remote_name: str, remote_url: str | None, pre_push_lines: list[str] | None) -> int:
@@ -348,17 +348,8 @@ def _impact_lines(files: list[str], details: list[str]) -> list[str]:
         summary = details[0].rstrip("。.")
         impacts.append(f"{summary}。これで、次から同じ流れをたどりやすくなったよ。")
 
-    has_remotion_src = any(path.startswith("Remotion/my-video/src/") for path in files)
-    has_text_layout = any(
-        (
-            "textLayout.ts" in path
-            or "/Subtitle" in path
-            or "/Hook" in path
-            or "SleepTravelLong" in path
-            or "CanvaSlideshow" in path
-        )
-        for path in files
-    )
+    has_skill_src = any(path.startswith(".agent/skills/") for path in files)
+    has_post_output = any(path.startswith("outputs/jmty/") for path in files)
     has_docs = any(
         path.startswith(".agent/skills/") or path.startswith("setup/") or path.endswith("CLAUDE.md")
         for path in files
@@ -368,10 +359,10 @@ def _impact_lines(files: list[str], details: list[str]) -> list[str]:
         for path in files
     )
 
-    if has_remotion_src and has_text_layout:
-        impacts.append("字幕や見出しの見え方がそろって、今後の画面づくりでも同じルールを使いやすくなったよ。")
-    elif has_remotion_src:
-        impacts.append("画面の作り方がまとまって、あとから同じ場所を直しやすくなったよ。")
+    if has_skill_src and has_post_output:
+        impacts.append("投稿作成の流れと出力先がそろって、次の生成でも迷いにくくなったよ。")
+    elif has_skill_src:
+        impacts.append("JMTY 用スキルの案内がまとまって、あとから同じ場所を直しやすくなったよ。")
 
     if has_docs:
         impacts.append("案内の紙もそろったので、次から迷いにくくなったよ。")
@@ -489,7 +480,7 @@ def _post_discord_message(webhook_url: str, content: str) -> None:
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "User-Agent": "team-info-bot/1.0",
+            "User-Agent": "jmty-bot/1.0",
         },
         method="POST",
     )
@@ -511,16 +502,16 @@ def main() -> int:
             pass
 
     parser = argparse.ArgumentParser(
-        description="Resolve cross-platform paths used by team-info skills."
+        description="Resolve cross-platform paths used by jmty skills."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("repo-root")
     repo_path_parser = subparsers.add_parser("repo-path")
     repo_path_parser.add_argument("relative_path")
-    subparsers.add_parser("remotion-python")
+    subparsers.add_parser("skill-python")
     subparsers.add_parser("python-runtime-mode")
-    subparsers.add_parser("build-remotion-python")
+    subparsers.add_parser("build-skill-python")
     subparsers.add_parser("pull-voicevox-engine")
     subparsers.add_parser("start-voicevox-engine")
     subparsers.add_parser("stop-voicevox-engine")
@@ -558,7 +549,7 @@ def main() -> int:
     setup_parser.add_argument(
         "--repo-root",
         default=".",
-        help="Path to the local team-info checkout. Default: current directory.",
+        help="Path to the local jmty checkout. Default: current directory.",
     )
     setup_parser.add_argument(
         "--owner",
@@ -569,7 +560,7 @@ def main() -> int:
         "--shell",
         choices=("sh", "powershell", "cmd"),
         default="sh",
-        help="Shell format used when printing TEAM_INFO_ROOT export guidance.",
+        help="Shell format used when printing JMTY_ROOT export guidance.",
     )
 
     shell_export_parser = subparsers.add_parser("shell-export")
@@ -577,7 +568,7 @@ def main() -> int:
         "--shell",
         choices=("sh", "powershell", "cmd"),
         default="sh",
-        help="Shell format used when printing TEAM_INFO_ROOT export guidance.",
+        help="Shell format used when printing JMTY_ROOT export guidance.",
     )
 
     copy_parser = subparsers.add_parser("copy-to-shared")
@@ -585,7 +576,7 @@ def main() -> int:
     copy_parser.add_argument("--subpath")
     copy_parser.add_argument("--shared-root")
 
-    run_parser = subparsers.add_parser("run-remotion-python")
+    run_parser = subparsers.add_parser("run-skill-python")
     run_parser.add_argument("run_args", nargs=argparse.REMAINDER)
 
     discord_report_parser = subparsers.add_parser("discord-git-report")
@@ -609,18 +600,18 @@ def main() -> int:
         print(get_repo_root() / args.relative_path)
         return 0
 
-    if args.command == "remotion-python":
+    if args.command == "skill-python":
         if get_python_runtime_mode() == "docker":
             print(f"docker://{get_python_runtime_image()}")
         else:
-            print(ensure_remotion_venv())
+            print(ensure_skill_venv())
         return 0
 
     if args.command == "python-runtime-mode":
         print(get_python_runtime_mode())
         return 0
 
-    if args.command == "build-remotion-python":
+    if args.command == "build-skill-python":
         print(build_python_runtime_image())
         return 0
 
@@ -650,7 +641,7 @@ def main() -> int:
         if shared_root is None:
             print(
                 "Shared root could not be detected. "
-                "Set TEAM_INFO_SHARED_ROOT to the synced team-info directory.",
+                "Set JMTY_SHARED_ROOT to the synced jmty directory.",
                 file=sys.stderr,
             )
             return 1
@@ -662,7 +653,7 @@ def main() -> int:
         if shared_root is None:
             print(
                 "Shared root could not be detected. "
-                "Set TEAM_INFO_SHARED_ROOT to the synced team-info directory.",
+                "Set JMTY_SHARED_ROOT to the synced jmty directory.",
                 file=sys.stderr,
             )
             return 1
@@ -798,7 +789,7 @@ def main() -> int:
         if shared_root is None:
             print(
                 "Shared root could not be detected. "
-                "Set TEAM_INFO_SHARED_ROOT or pass --shared-root.",
+                "Set JMTY_SHARED_ROOT or pass --shared-root.",
                 file=sys.stderr,
             )
             return 1
@@ -809,16 +800,16 @@ def main() -> int:
         print(destination)
         return 0
 
-    if args.command == "run-remotion-python":
+    if args.command == "run-skill-python":
         run_args: list[str] = list(args.run_args)
         if run_args and run_args[0] == "--":
             run_args.pop(0)
         if not run_args:
-            print("No command was provided to run-remotion-python.", file=sys.stderr)
+            print("No command was provided to run-skill-python.", file=sys.stderr)
             return 1
 
         try:
-            completed = run_remotion_python(run_args)
+            completed = run_skill_python(run_args)
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1

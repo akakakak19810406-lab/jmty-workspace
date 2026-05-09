@@ -1,1 +1,0 @@
-../../.agent/skills/remotion/script-writing-accounts-aware/SKILL.md

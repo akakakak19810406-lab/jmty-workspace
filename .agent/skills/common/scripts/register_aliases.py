@@ -1,7 +1,7 @@
-# チームツール用エイリアスをシェル設定に登録するスクリプト。
+# JMTY workspace 用エイリアスをシェル設定に登録するスクリプト。
 # Claude SessionStart hook / bootstrap.sh / ~/.zshrc の自動チェックから呼ばれ、
 # 不足しているエイリアスがある場合のみ書き込む（冪等）。引数でリポジトリルートを渡せる。
-# macOS/Linux は ~/.config/team-info/env.sh、Windows は PowerShell プロファイルに追記する。
+# macOS/Linux は ~/.config/jmty/env.sh、Windows は PowerShell プロファイルに追記する。
 
 import json
 import os
@@ -10,24 +10,22 @@ import platform
 import sys
 
 ALIASES = [
-    ("setup",    'bash "{root}/setup/setup_all.cmd"'),
-    ("x-post",   'bash "{root}/.agent/skills/x-post-writer/scripts/start_preview.sh"'),
-    ("remotion", 'npm --prefix "{root}/Remotion/my-video" run dev'),
-    ("renda",    'bash "{root}/Remotion/scripts/render_to_outputs.sh"'),
+    ("jmty-setup", 'python3 "{root}/.agent/skills/common/scripts/jmty_runtime.py" setup-local-machine --repo-root "{root}"'),
+    ("jmty-sync-commands", 'python3 "{root}/scripts/sync_cross_cli_commands.py"'),
+    ("jmty-status", 'git -C "{root}" status --short'),
 ]
 
 PS_FUNCTIONS = [
-    ("setup",    '& "{root}\\setup\\setup_windows.ps1"'),
-    ("x-post",   'bash "{root}/.agent/skills/x-post-writer/scripts/start_preview.sh"'),
-    ("remotion", 'npm --prefix "{root}/Remotion/my-video" run dev'),
-    ("renda",    'bash "{root}/Remotion/scripts/render_to_outputs.sh"'),
+    ("jmty-setup", 'py -3 "{root}\\.agent\\skills\\common\\scripts\\jmty_runtime.py" setup-local-machine --repo-root "{root}" --shell powershell'),
+    ("jmty-sync-commands", 'py -3 "{root}\\scripts\\sync_cross_cli_commands.py"'),
+    ("jmty-status", 'git -C "{root}" status --short'),
 ]
 
-REGISTERED_FLAG = pathlib.Path.home() / ".config" / "team-info" / "aliases-registered"
+REGISTERED_FLAG = pathlib.Path.home() / ".config" / "jmty" / "aliases-registered"
 
 # ~/.zshrc などに仕込む「ターミナル起動時の自動チェック行」のテンプレート
-# TEAM_INFO_ROOT が未設定でも動くようにスクリプト絶対パスを直接埋め込む
-_ZSHRC_HOOK_MARKER = "team-info alias auto-check"
+# JMTY_ROOT が未設定でも動くようにスクリプト絶対パスを直接埋め込む
+_ZSHRC_HOOK_MARKER = "jmty alias auto-check"
 _ZSHRC_HOOK_TMPL = (
     "\n# {marker}\n"
     "[ -f \"{script}\" ] && python \"{script}\" --root \"{root}\" 2>/dev/null\n"
@@ -67,7 +65,7 @@ def _ensure_zshrc_hook(root: pathlib.Path, home: pathlib.Path) -> bool:
 
 
 def register_mac(root: pathlib.Path, home: pathlib.Path) -> bool:
-    env_dir = home / ".config" / "team-info"
+    env_dir = home / ".config" / "jmty"
     env_file = env_dir / "env.sh"
     env_dir.mkdir(parents=True, exist_ok=True)
 
@@ -76,13 +74,13 @@ def register_mac(root: pathlib.Path, home: pathlib.Path) -> bool:
     # 古いエイリアス行を除去してから書き直す
     kept = [
         l for l in existing.splitlines()
-        if not any(k in l for k in ("alias setup", "alias x-post", "alias remotion", "alias renda", "チームツール"))
+        if not any(k in l for k in ("alias jmty-setup", "alias jmty-sync-commands", "alias jmty-status", "JMTY workspace"))
     ]
     while kept and not kept[-1].strip():
         kept.pop()
     new_lines = [
         "",
-        "# チームツール起動エイリアス (register_aliases.py により自動登録)",
+        "# JMTY workspace エイリアス (register_aliases.py により自動登録)",
     ]
     for name, cmd in ALIASES:
         new_lines.append(f"alias {name}='{cmd.format(root=root)}'")
@@ -118,12 +116,12 @@ def register_windows(root: pathlib.Path, home: pathlib.Path) -> bool:
     kept = [
         line for line in existing.splitlines()
         if not any(line.strip().startswith(f"function {name}") for name in managed_names)
-        and "チームツール起動エイリアス" not in line
+        and "JMTY workspace エイリアス" not in line
     ]
 
     new_lines = [
         "",
-        "# チームツール起動エイリアス (register_aliases.py により自動登録)",
+        "# JMTY workspace エイリアス (register_aliases.py により自動登録)",
     ]
     for name, cmd in PS_FUNCTIONS:
         new_lines.append(f'function {name} {{ {cmd.format(root=root)} }}')
@@ -160,7 +158,7 @@ def main() -> None:
     if registered:
         REGISTERED_FLAG.parent.mkdir(parents=True, exist_ok=True)
         REGISTERED_FLAG.touch()
-        msg = "✅ エイリアス自動登録完了 (setup / x-post / remotion / renda) — 新しいターミナルで使えます"
+        msg = "エイリアス自動登録完了 (jmty-setup / jmty-sync-commands / jmty-status) — 新しいターミナルで使えます"
         print(json.dumps({"systemMessage": msg}))
 
 

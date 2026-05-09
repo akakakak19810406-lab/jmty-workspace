@@ -18,28 +18,28 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 
-TEAM_INFO_ROOT_ENV = "TEAM_INFO_ROOT"
+JMTY_ROOT_ENV = "JMTY_ROOT"
 LOCAL_STATE_FILENAME = "local_state.json"
 WORKED_BEFORE_FILENAME = "worked_before_machines.json"
-LOCAL_STATE_APP_NAME = "team-info"
-DISCORD_GIT_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_GIT_WEBHOOK_URL"
+LOCAL_STATE_APP_NAME = "jmty"
+DISCORD_GIT_WEBHOOK_URL_ENV = "JMTY_DISCORD_GIT_WEBHOOK_URL"
 DISCORD_GIT_WEBHOOK_URL_KEY = "discord_git_webhook_url"
 DISCORD_GIT_WEBHOOK_SHARED_RELATIVE_PATH = Path("config") / "discord-git-webhook.json"
 DISCORD_GIT_WEBHOOK_SHARED_URL_KEY = "url"
-DISCORD_JMTY_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_JMTY_WEBHOOK_URL"
+DISCORD_JMTY_WEBHOOK_URL_ENV = "JMTY_DISCORD_JMTY_WEBHOOK_URL"
 DISCORD_JMTY_WEBHOOK_SHARED_RELATIVE_PATH = Path("config") / "discord-jmty-webhook.json"
-PYTHON_RUNTIME_IMAGE = "team-info/python-skill-runtime:3.11.9"
+PYTHON_RUNTIME_IMAGE = "jmty/python-skill-runtime:3.11.9"
 VOICEVOX_ENGINE_IMAGE = "voicevox/voicevox_engine"
-VOICEVOX_ENGINE_CONTAINER = "team-info-voicevox-engine"
-CONTAINER_REPO_ROOT = PurePosixPath("/workspace/team-info")
-CONTAINER_SHARED_ROOT = PurePosixPath("/workspace/team-info-shared")
-CONTAINER_HOME = PurePosixPath("/tmp/team-info-home")
+VOICEVOX_ENGINE_CONTAINER = "jmty-voicevox-engine"
+CONTAINER_REPO_ROOT = PurePosixPath("/workspace/jmty")
+CONTAINER_SHARED_ROOT = PurePosixPath("/workspace/jmty-shared")
+CONTAINER_HOME = PurePosixPath("/tmp/jmty-home")
 REPO_GIT_HOOKS_DIRNAME = ".githooks"
 GIT_LFS_POINTER_VERSION = "version https://git-lfs.github.com/spec/v1"
 GITHUB_FREE_GIT_LFS_STORAGE_BYTES = 10 * 1024**3
 MAX_GIT_LFS_POINTER_BLOB_BYTES = 2048
-GIT_LFS_RESERVED_BYTES_ENV = "TEAM_INFO_GIT_LFS_RESERVED_BYTES"
-GIT_LFS_FREE_STORAGE_BYTES_ENV = "TEAM_INFO_GIT_LFS_FREE_STORAGE_BYTES"
+GIT_LFS_RESERVED_BYTES_ENV = "JMTY_GIT_LFS_RESERVED_BYTES"
+GIT_LFS_FREE_STORAGE_BYTES_ENV = "JMTY_GIT_LFS_FREE_STORAGE_BYTES"
 
 
 @dataclass(frozen=True)
@@ -378,7 +378,7 @@ def save_discord_jmty_webhook_url(url: str, repo_root: Path | None = None) -> Pa
 
 
 def get_repo_root() -> Path:
-    env_override = os.environ.get(TEAM_INFO_ROOT_ENV)
+    env_override = os.environ.get(JMTY_ROOT_ENV)
     if env_override:
         env_path = _normalize_path(Path(env_override))
         if _looks_like_repo_root(env_path):
@@ -399,8 +399,8 @@ def get_repo_root() -> Path:
             return candidate
 
     raise RuntimeError(
-        "team-info repository root could not be detected. "
-        f"Set {TEAM_INFO_ROOT_ENV} or run setup-local-machine once."
+        "jmty repository root could not be detected. "
+        f"Set {JMTY_ROOT_ENV} or run setup-local-machine once."
     )
 
 
@@ -429,36 +429,36 @@ def _bootstrap_python() -> Path:
     raise RuntimeError("Python interpreter was not found.")
 
 
-def _remotion_python_candidates() -> Iterable[Path]:
+def _skill_python_candidates() -> Iterable[Path]:
     repo_root = get_repo_root()
-    remotion_root = repo_root / "Remotion" / ".venv"
+    skill_root = repo_root / "skill-runtime" / ".venv"
 
-    env_override = os.environ.get("REMOTION_PYTHON")
+    env_override = os.environ.get("JMTY_SKILL_PYTHON")
     if env_override:
         yield Path(env_override).expanduser()
 
-    yield remotion_root / "Scripts" / "python.exe"
-    yield remotion_root / "Scripts" / "python"
-    yield remotion_root / "bin" / "python3"
-    yield remotion_root / "bin" / "python"
+    yield skill_root / "Scripts" / "python.exe"
+    yield skill_root / "Scripts" / "python"
+    yield skill_root / "bin" / "python3"
+    yield skill_root / "bin" / "python"
 
 
-def get_remotion_python() -> Path | None:
-    for candidate in _remotion_python_candidates():
+def get_skill_python() -> Path | None:
+    for candidate in _skill_python_candidates():
         if candidate.exists():
             return candidate.expanduser().absolute()
     return None
 
 
-def ensure_remotion_venv() -> Path:
-    existing = get_remotion_python()
+def ensure_skill_venv() -> Path:
+    existing = get_skill_python()
     if existing is not None:
         return existing
 
     repo_root = get_repo_root()
-    remotion_root = repo_root / "Remotion"
-    venv_dir = remotion_root / ".venv"
-    remotion_root.mkdir(parents=True, exist_ok=True)
+    skill_root = repo_root / "skill-runtime"
+    venv_dir = skill_root / ".venv"
+    skill_root.mkdir(parents=True, exist_ok=True)
 
     subprocess.run(
         [str(_bootstrap_python()), "-m", "venv", str(venv_dir)],
@@ -466,27 +466,27 @@ def ensure_remotion_venv() -> Path:
         cwd=str(repo_root),
     )
 
-    created = get_remotion_python()
+    created = get_skill_python()
     if created is None:
-        raise RuntimeError("Failed to create Remotion virtual environment.")
+        raise RuntimeError("Failed to create JMTY skill virtual environment.")
     return created
 
 
 def get_python_runtime_mode() -> str:
-    mode = os.environ.get("TEAM_INFO_PYTHON_RUNTIME", "docker").strip().lower()
+    mode = os.environ.get("JMTY_PYTHON_RUNTIME", "docker").strip().lower()
     if mode not in {"docker", "host"}:
         raise RuntimeError(
-            "TEAM_INFO_PYTHON_RUNTIME must be either 'docker' or 'host'."
+            "JMTY_PYTHON_RUNTIME must be either 'docker' or 'host'."
         )
     return mode
 
 
 def get_python_runtime_image() -> str:
-    return os.environ.get("TEAM_INFO_PYTHON_IMAGE", PYTHON_RUNTIME_IMAGE)
+    return os.environ.get("JMTY_PYTHON_IMAGE", PYTHON_RUNTIME_IMAGE)
 
 
 def get_voicevox_engine_image() -> str:
-    return os.environ.get("TEAM_INFO_VOICEVOX_IMAGE", VOICEVOX_ENGINE_IMAGE)
+    return os.environ.get("JMTY_VOICEVOX_IMAGE", VOICEVOX_ENGINE_IMAGE)
 
 
 def _docker_available() -> bool:
@@ -548,7 +548,7 @@ def pull_voicevox_engine_image() -> str:
 
 
 def _voicevox_container_name() -> str:
-    return os.environ.get("TEAM_INFO_VOICEVOX_CONTAINER", VOICEVOX_ENGINE_CONTAINER)
+    return os.environ.get("JMTY_VOICEVOX_CONTAINER", VOICEVOX_ENGINE_CONTAINER)
 
 
 def _container_exists(name: str) -> bool:
@@ -712,7 +712,7 @@ def _rewrite_run_args_for_container(run_args: list[str]) -> list[str]:
 
 
 def _requires_voicevox_engine(run_args: list[str]) -> bool:
-    if os.environ.get("TEAM_INFO_NEEDS_VOICEVOX") == "1":
+    if os.environ.get("JMTY_NEEDS_VOICEVOX") == "1":
         return True
 
     for arg in run_args:
@@ -758,9 +758,9 @@ def build_python_runtime_command(run_args: list[str]) -> list[str]:
             "-e",
             f"HOME={CONTAINER_HOME}",
             "-e",
-            f"TEAM_INFO_ROOT={CONTAINER_REPO_ROOT}",
+            f"JMTY_ROOT={CONTAINER_REPO_ROOT}",
             "-e",
-            "TEAM_INFO_IN_DOCKER=1",
+            "JMTY_IN_DOCKER=1",
             "-e",
             "PYTHONUNBUFFERED=1",
             "-e",
@@ -788,7 +788,7 @@ def build_python_runtime_command(run_args: list[str]) -> list[str]:
         command.extend(
             [
                 "-e",
-                f"TEAM_INFO_SHARED_ROOT={CONTAINER_SHARED_ROOT}",
+                f"JMTY_SHARED_ROOT={CONTAINER_SHARED_ROOT}",
                 "-v",
                 f"{shared_root}:{CONTAINER_SHARED_ROOT}",
             ]
@@ -798,21 +798,21 @@ def build_python_runtime_command(run_args: list[str]) -> list[str]:
     return command
 
 
-def run_remotion_python(run_args: list[str]) -> subprocess.CompletedProcess[object]:
+def run_skill_python(run_args: list[str]) -> subprocess.CompletedProcess[object]:
     if get_python_runtime_mode() == "host":
-        remotion_python = ensure_remotion_venv()
-        return subprocess.run([str(remotion_python), *run_args], cwd=str(get_repo_root()))
+        skill_python = ensure_skill_venv()
+        return subprocess.run([str(skill_python), *run_args], cwd=str(get_repo_root()))
 
     if _pip_install_is_mutating(run_args):
         raise RuntimeError(
             "Docker ランタイムでは pip install / uninstall を直接保持できません。"
             " setup/requirements.txt を更新し、"
-            " team_info_runtime.py build-remotion-python を実行してください。"
+            " jmty_runtime.py build-skill-python を実行してください。"
         )
 
     if (
         _requires_voicevox_engine(run_args)
-        and os.environ.get("TEAM_INFO_AUTO_START_VOICEVOX", "1") != "0"
+        and os.environ.get("JMTY_AUTO_START_VOICEVOX", "1") != "0"
         and get_voicevox_base_url(for_container=True).startswith(
             "http://host.docker.internal:50021"
         )
@@ -888,7 +888,7 @@ def _windows_machine_marker() -> str | None:
 
 
 def get_machine_fingerprint() -> str:
-    marker = os.environ.get("TEAM_INFO_MACHINE_ID")
+    marker = os.environ.get("JMTY_MACHINE_ID")
 
     if not marker:
         if sys.platform == "darwin":
@@ -972,7 +972,7 @@ def clear_worked_before(machine_id: str | None = None) -> bool:
 
 
 def _shared_root_candidates() -> Iterable[Path]:
-    for env_name in ("TEAM_INFO_SHARED_ROOT", "TEAM_INFO_GDRIVE_ROOT"):
+    for env_name in ("JMTY_SHARED_ROOT", "JMTY_GDRIVE_ROOT"):
         env_value = os.environ.get(env_name)
         if env_value:
             yield Path(env_value).expanduser()
@@ -983,21 +983,21 @@ def _shared_root_candidates() -> Iterable[Path]:
     if cloud_storage.exists():
         for provider_root in cloud_storage.glob("GoogleDrive-*"):
             for drive_name in ("My Drive", "マイドライブ"):
-                yield provider_root / drive_name / "team-info"
+                yield provider_root / drive_name / "jmty"
         for provider_root in cloud_storage.glob("OneDrive*"):
-            yield provider_root / "team-info"
+            yield provider_root / "jmty"
 
     for drive_name in ("My Drive", "マイドライブ"):
-        yield home / "Google Drive" / drive_name / "team-info"
-        yield home / "GoogleDrive" / drive_name / "team-info"
+        yield home / "Google Drive" / drive_name / "jmty"
+        yield home / "GoogleDrive" / drive_name / "jmty"
 
-    yield home / "GoogleDrive" / "team-info"
-    yield home / "OneDrive" / "team-info"
+    yield home / "GoogleDrive" / "jmty"
+    yield home / "OneDrive" / "jmty"
 
     for onedrive_root in home.glob("OneDrive*"):
-        yield onedrive_root / "team-info"
+        yield onedrive_root / "jmty"
 
-    yield home / "Dropbox" / "team-info"
+    yield home / "Dropbox" / "jmty"
 
 
 def detect_shared_root() -> Path | None:
@@ -1322,7 +1322,7 @@ def _git_lfs_free_storage_bytes(repo_root: Path) -> int:
         if parsed > 0:
             return parsed
 
-    configured = _git_config_int(repo_root, "team-info.lfsFreeStorageBytes")
+    configured = _git_config_int(repo_root, "jmty.lfsFreeStorageBytes")
     if configured is not None and configured > 0:
         return configured
     return GITHUB_FREE_GIT_LFS_STORAGE_BYTES
@@ -1338,7 +1338,7 @@ def _git_lfs_reserved_bytes(repo_root: Path) -> int:
         if parsed >= 0:
             return parsed
 
-    configured = _git_config_int(repo_root, "team-info.lfsReservedBytes")
+    configured = _git_config_int(repo_root, "jmty.lfsReservedBytes")
     if configured is not None and configured >= 0:
         return configured
     return 0
@@ -1417,7 +1417,7 @@ def get_git_lfs_free_plan_status(
         warning = (
             "この判定は今のリポジトリで見える LFS オブジェクトを基準にしています。"
             " 同じ GitHub アカウントで他の LFS を使うなら、"
-            " `team-info.lfsReservedBytes` か"
+            " `jmty.lfsReservedBytes` か"
             f" `{GIT_LFS_RESERVED_BYTES_ENV}` を設定してください。"
         )
 

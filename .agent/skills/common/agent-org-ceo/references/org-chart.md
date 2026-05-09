@@ -3,36 +3,38 @@ markmap:
   colorFreezeLevel: 2
 ---
 
-# オーナー
+# JMTY Workspace
 
-## ジョブズ（CEO）
-- 意思決定・優先順位・統合
+## CEO
+- 判断
+- 優先順位
+- 統合
 
-### ガレス（Ops Manager）
+### Ops Manager
 - Git
 - セットアップ
 - repo 整理
-- 引き継ぎ
+- コマンド同期
 
-### ソフィア（Web Manager）
-- Web 制作・UI
-- サイト複製
-- イラスト差し替え
+### Writing Manager
+- ジモティ投稿文
+- 見出し
+- 本文
+- テンプレ差分
 
-### ルカーノ（Media Manager）
-- Remotion 動画
-- 字幕・音声
-- Canva スライド
+### Research Manager
+- 求人素材確認
+- 掲載条件確認
+- 入力ファイル整理
 
-### ウォーレン（Research Manager）
-- 市場・競合調査
-- 情報収集・要約
+### Automation Manager
+- Google Drive 同期
+- 定型処理
+- 週次素材処理
 
-### イーロン（Writing Manager）
-- 台本
-- X 投稿・SNS
-- 記事・投稿文
+### Media Manager
+- 画像整理
+- 週次素材
 
-### ゼノン（Automation Manager）
-- Google Workspace
-- 自動化・定型処理
+### Web Manager
+- 必要時だけ簡易表示物

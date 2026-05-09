@@ -17,7 +17,7 @@ COMMANDS: list[dict[str, str]] = [
     {"name": "git-nd", "description": "git-workflow に従ってコミットと反映を行う（Discord報告なし）", "kind": "skill", "skill_path": ".agent/skills/common/git-workflow/SKILL.md"},
     {"name": "pull", "description": "origin/main を fetch して pull --rebase する", "kind": "git-pull"},
     {"name": "ceo", "description": "CEO 経由で必要な役割へ振り分ける", "kind": "skill", "skill_path": ".agent/skills/common/agent-org-ceo/SKILL.md"},
-    {"name": "setup", "description": "JMTY workspace のセットアップ補助を始める", "kind": "skill", "skill_path": ".agent/skills/common/team-info-setup/SKILL.md"},
+    {"name": "setup", "description": "JMTY workspace のセットアップ補助を始める", "kind": "skill", "skill_path": ".agent/skills/common/jmty-setup/SKILL.md"},
     {"name": "jmty", "description": "ジモティー投稿文スキルを起動する", "kind": "skill", "skill_path": ".agent/skills/jmty/jmty-posts/SKILL.md"},
     {"name": "jmty-weekly", "description": "ジモティー週次素材処理を起動する", "kind": "file", "target_path": ".agent/skills/nanobanana-banner-gen/scripts/jmty_weekly_assets.py"},
 ]

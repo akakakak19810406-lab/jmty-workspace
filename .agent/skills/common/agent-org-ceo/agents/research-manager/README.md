@@ -1,9 +1,9 @@
-# Research Manager — ウォーレン
+# Research Manager
 
-- 役割: 市場調査、競合調査、情報収集、要約
-- 主担当スキル:
-  - `$TEAM_INFO_ROOT/.agent/skills/common/agent-reach/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/insta-company-research-brief/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/personal/deguchishouma/monthly-kpi-planner/SKILL.md`
+- 役割: JMTY 投稿に必要な求人素材・掲載条件・表現確認
+- 主担当:
+  - `inputs/jmty_factory_cases/`
+  - `inputs/jmty_remote_samples/`
+  - `$JMTY_ROOT/.agent/skills/jmty/jmty-posts/SKILL.md`
 - メモ:
-  - 個人用の KPI 系は personal 側を正本とする
+  - 外部調査が必要な場合は、取得元と日付を明記して Writing Manager へ渡す

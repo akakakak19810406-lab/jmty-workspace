@@ -1,13 +1,13 @@
 ---
 name: gdrive-copy
-description: ローカルのファイルやフォルダを rclone 経由で Google Drive の team-info フォルダにアップロードするスキル。Google Drive for Desktop のローカルパスに依存せず、チーム全員が共通コマンドで実行できる。
+description: ローカルのファイルやフォルダを rclone 経由で Google Drive の jmty フォルダにアップロードするスキル。Google Drive for Desktop のローカルパスに依存せず、チーム全員が共通コマンドで実行できる。
 ---
 
 # Google Drive アップロードスキル（rclone 版）
 
 ## 目的
 
-`マイドライブ/team-info`（フォルダID: `1QKaUP9fvA46mINkpSR1b2wqrIBE6By0t`）へ
+`マイドライブ/jmty`（フォルダID: `1QKaUP9fvA46mINkpSR1b2wqrIBE6By0t`）へ
 ローカルのファイル・フォルダを **rclone** 経由でアップロードする。
 
 Google Drive for Desktop のローカルマウントパスには依存しない。
@@ -86,16 +86,16 @@ rclone lsd gdrive:
 スキルの流れや会話の中でコピー元・コピー先がわかっている場合は、引数付きで即実行できるコマンドをユーザーに渡すこと。
 
 ```bash
-python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/gdrive_copy.py" \
+python3 "$JMTY_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/gdrive_copy.py" \
   --src "[コピー元の絶対パス]" \
-  --dest "[team-info直下のコピー先サブパス]"
+  --dest "[jmty直下のコピー先サブパス]"
 ```
 
-**例（アコリエル動画）:**
+**例（JMTY 投稿出力）:**
 ```bash
-python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/gdrive_copy.py" \
-  --src "$TEAM_INFO_ROOT/outputs/acoriel/renders/Hana.mp4" \
-  --dest "outputs/アコリエル/"
+python3 "$JMTY_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/gdrive_copy.py" \
+  --src "$JMTY_ROOT/outputs/jmty/factory" \
+  --dest "outputs/jmty_posts/factory/"
 ```
 
 引数を渡した場合は確認なしで即アップロードし、完了後に Google Drive の URL を表示する。
@@ -105,7 +105,7 @@ python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/g
 ### インタラクティブモード（コピー対象が不明な場合）
 
 ```bash
-python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/gdrive_copy.py"
+python3 "$JMTY_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/gdrive_copy.py"
 ```
 
 対話形式でコピー元・コピー先サブフォルダを選んでアップロードします。
@@ -115,7 +115,7 @@ python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/g
 ## 動作フロー（インタラクティブモード）
 
 1. **事前チェック**
-   - `TEAM_INFO_ROOT` 環境変数の確認
+   - `JMTY_ROOT` 環境変数の確認
    - `rclone` コマンドの存在確認
    - `gdrive` リモートの設定確認
 
@@ -124,14 +124,14 @@ python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/g
    - `2` ファイル/フォルダを番号で選んでアップロード
 
 3. **コピー元パス入力**
-   - 絶対パス、または `TEAM_INFO_ROOT` からの相対パスで指定
-   - 例: `outputs/acoriel/renders`、`Remotion/my-video/out`
+   - 絶対パス、または `JMTY_ROOT` からの相対パスで指定
+   - 例: `outputs/jmty/factory`、`outputs/jmty/remote`
 
 4. **ファイル選択**（モード2のみ）
    - 番号（複数はカンマ区切り）または `all` で全選択
 
 5. **コピー先サブフォルダ指定**
-   - `team-info` 直下なら Enter、サブフォルダ名を入力して掘り下げも可能
+   - `jmty` 直下なら Enter、サブフォルダ名を入力して掘り下げも可能
 
 6. **確認後に rclone で実行** → macOS 通知で完了を知らせる
 
@@ -141,7 +141,7 @@ python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/g
 
 ユーザーが以下のような発言をしたとき:
 - 「Google Drive にアップロードして」
-- 「team-info の Drive フォルダに送って」
+- 「jmty の Drive フォルダに送って」
 - 「gdrive に上げて」
 - 「Drive にコピーして」
 - `/gdrive`
@@ -152,7 +152,7 @@ python3 "$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/gdrive-copy/scripts/g
 
 | エラーメッセージ | 原因 | 対処 |
 |---|---|---|
-| `TEAM_INFO_ROOT が未設定です` | 環境変数が設定されていない | `setup-local-machine` を実行する |
+| `JMTY_ROOT が未設定です` | 環境変数が設定されていない | `setup-local-machine` を実行する |
 | `rclone が見つかりません` | rclone 未インストール | `brew install rclone`（Mac）または winget でインストール |
 | `gdrive リモートが未設定です` | rclone config 未実施 | `rclone config` で gdrive を追加する |
 | `対象パスが見つかりません` | コピー元パスが存在しない | パスを再確認する |

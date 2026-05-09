@@ -10,4 +10,5 @@
 
 ## 禁止
 - webhook URL、APIキー、認証情報をコミットしない
-- team-info 本体の remote をこの repo の origin に使い回さない
+- 他リポジトリの remote をこの repo の origin に使い回さない
+- JMTY 以外の動画制作・記事制作・Web 制作素材をこの repo に混ぜない

@@ -1,1 +1,0 @@
-../../.agent/skills/common/note-article-ayumi/SKILL.md

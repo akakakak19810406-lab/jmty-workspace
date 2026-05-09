@@ -1,1 +1,0 @@
-../../.agent/skills/jmty/jmty-posts-factory-12/SKILL.md

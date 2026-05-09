@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Google Drive アップロードツール（rclone 版）
-rclone を使って Google Drive の team-info フォルダへファイル/フォルダをアップロードする。
+rclone を使って Google Drive の jmty フォルダへファイル/フォルダをアップロードする。
 Google Drive for Desktop のローカルマウントパスには依存しない。
 """
 
@@ -17,17 +17,17 @@ GOOGLE_DRIVE_FOLDER_ID = "1QKaUP9fvA46mINkpSR1b2wqrIBE6By0t"
 # ──────────────────────────────────────────────────────
 
 
-def get_team_info_root() -> Path:
-    """TEAM_INFO_ROOT 環境変数を取得して Path で返す。未設定なら即終了。"""
-    root = os.environ.get("TEAM_INFO_ROOT", "").strip()
+def get_jmty_root() -> Path:
+    """JMTY_ROOT 環境変数を取得して Path で返す。未設定なら即終了。"""
+    root = os.environ.get("JMTY_ROOT", "").strip()
     if not root:
-        print("✗ TEAM_INFO_ROOT が未設定です。")
+        print("✗ JMTY_ROOT が未設定です。")
         print("  setup-local-machine を実行して環境変数を設定してください。")
-        print("  例: export TEAM_INFO_ROOT=/path/to/team-info")
+        print("  例: export JMTY_ROOT=/path/to/jmty")
         sys.exit(1)
     p = Path(root)
     if not p.is_dir():
-        print(f"✗ TEAM_INFO_ROOT が指すディレクトリが存在しません: {p}")
+        print(f"✗ JMTY_ROOT が指すディレクトリが存在しません: {p}")
         sys.exit(1)
     return p
 
@@ -81,27 +81,27 @@ def check_gdrive_remote() -> None:
         print(f"\n  ✓ '{REMOTE_NAME}' の設定が完了しました。")
 
 
-def preflight(team_info_root: Path) -> None:
+def preflight(jmty_root: Path) -> None:
     """実行前チェックをまとめて行う。"""
     print("  事前チェック中...")
     check_rclone()
     check_gdrive_remote()
     print(f"  ✓ rclone OK / remote '{REMOTE_NAME}' OK")
-    print(f"  ✓ TEAM_INFO_ROOT: {team_info_root}")
+    print(f"  ✓ JMTY_ROOT: {jmty_root}")
 
 
-def pick_source(team_info_root: Path) -> Path:
+def pick_source(jmty_root: Path) -> Path:
     """コピー元のパスをユーザーに選ばせる。"""
     while True:
         raw = input(
             "\nコピー元のパスを入力してください\n"
-            "（絶対パス、または TEAM_INFO_ROOT からの相対パス）:\n> "
+            "（絶対パス、または JMTY_ROOT からの相対パス）:\n> "
         ).strip()
         if not raw:
             continue
         p = Path(raw)
         if not p.is_absolute():
-            p = team_info_root / p
+            p = jmty_root / p
         if p.exists():
             return p
         print(f"  ✗ パスが見つかりません: {p}")
@@ -143,9 +143,9 @@ def pick_files_from_dir(directory: Path) -> list[Path]:
 
 
 def pick_dest_subdir() -> str:
-    """コピー先のサブフォルダ名を入力させる。空のまま Enter で team-info 直下。"""
+    """コピー先のサブフォルダ名を入力させる。空のまま Enter で jmty 直下。"""
     print(f"\nコピー先: {REMOTE_NAME}:{GOOGLE_DRIVE_FOLDER_ID}/")
-    print("サブフォルダ名を入力（team-info 直下に置く場合は Enter）:")
+    print("サブフォルダ名を入力（jmty 直下に置く場合は Enter）:")
     sub = input("> ").strip()
     if sub:
         return f"{REMOTE_NAME}:{GOOGLE_DRIVE_FOLDER_ID}/{sub}"
@@ -219,7 +219,7 @@ def run_upload(targets: list[Path], dest_remote: str) -> None:
 
     fail_count = len(targets) - success_count
     if fail_count == 0:
-        msg = f"{success_count} 件を team-info にアップロードしました"
+        msg = f"{success_count} 件を jmty にアップロードしました"
         notify(msg)
         print(f"\n✓ 完了（{success_count} 件）")
     else:
@@ -235,11 +235,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Google Drive アップロードツール（rclone 版）")
     parser.add_argument("--src", help="コピー元のファイルまたはフォルダの絶対パス")
-    parser.add_argument("--dest", help="team-info フォルダ直下のコピー先サブパス（例: outputs/アコリエル/）")
+    parser.add_argument("--dest", help="jmty フォルダ直下のコピー先サブパス（例: outputs/アコリエル/）")
     args = parser.parse_args()
 
-    team_info_root = get_team_info_root()
-    preflight(team_info_root)
+    jmty_root = get_jmty_root()
+    preflight(jmty_root)
 
     # ── 引数モード（対話なし）──────────────────────────
     if args.src and args.dest:
@@ -254,7 +254,7 @@ def main() -> None:
     # ── 対話モード ────────────────────────────────────
     print("=" * 54)
     print("  Google Drive アップロードツール（rclone 版）")
-    print(f"  アップロード先: gdrive:team-info")
+    print(f"  アップロード先: gdrive:jmty")
     print(f"  フォルダID: {GOOGLE_DRIVE_FOLDER_ID}")
     print("=" * 54)
 
@@ -267,7 +267,7 @@ def main() -> None:
             break
         print("  1 か 2 を入力してください")
 
-    src_path = pick_source(team_info_root)
+    src_path = pick_source(jmty_root)
 
     if mode == "1":
         if not src_path.is_dir():

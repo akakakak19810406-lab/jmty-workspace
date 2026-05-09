@@ -5,20 +5,20 @@ description: 変更内容をリモートリポジトリに反映するための 
 # Git ワークフロースキル
 
 ## 絶対パスルール（必須）
-- ユーザーに Git コマンドを見せるときは、固定の `/Users/...` ではなく `TEAM_INFO_ROOT` を使って絶対パスを組み立てる。
-- `git status` のように短く書かず、`git -C "$TEAM_INFO_ROOT" status` の形で渡す。
-- 新しいパソコンでは、リポジトリルートで `python .agent/skills/common/scripts/team_info_runtime.py setup-local-machine --repo-root .` を 1 回実行して `TEAM_INFO_ROOT` を決める。
+- ユーザーに Git コマンドを見せるときは、固定の `/Users/...` ではなく `JMTY_ROOT` を使って絶対パスを組み立てる。
+- `git status` のように短く書かず、`git -C "$JMTY_ROOT" status` の形で渡す。
+- 新しいパソコンでは、リポジトリルートで `python .agent/skills/common/scripts/jmty_runtime.py setup-local-machine --repo-root .` を 1 回実行して `JMTY_ROOT` を決める。
 - オーナー機として使うパソコンだけ、上のコマンドに `--owner` を付ける。
-- `cd` を使う場合も、移動先は `"$TEAM_INFO_ROOT/..."` の形にする。
+- `cd` を使う場合も、移動先は `"$JMTY_ROOT/..."` の形にする。
 
 ## 事前確認 (Pre-flight Check)
-スキル実行前に必ず `git -C "$TEAM_INFO_ROOT" status` を確認し、未コミットの変更があるか把握すること。
+スキル実行前に必ず `git -C "$JMTY_ROOT" status` を確認し、未コミットの変更があるか把握すること。
 
 ## オーナー機とPR分岐（必須）
 - `/git` と `/git-nd` では、push / PR 判断の前に必ず次を実行する。
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" owner-status
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" owner-status
 ```
 
 - 結果が `owner` のときだけ、`main` へ直接 push してよい。
@@ -30,7 +30,7 @@ python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" owner
 ```bash
 GITHUB_ACCOUNT="$(gh api user --jq .login)"
 BRANCH_NAME="agent/${GITHUB_ACCOUNT}/$(date +%Y%m%d-%H%M%S)-git"
-git -C "$TEAM_INFO_ROOT" switch -c "$BRANCH_NAME"
+git -C "$JMTY_ROOT" switch -c "$BRANCH_NAME"
 ```
 
 - `other` のときにすでに `main` 以外のブランチにいる場合は、ブランチ名に GitHub アカウント名が含まれていれば現在のブランチをそのまま使ってよい。含まれていない場合は、GitHub アカウント名を含む新しい作業ブランチへ切り替える。
@@ -41,7 +41,7 @@ git -C "$TEAM_INFO_ROOT" switch -c "$BRANCH_NAME"
 - push の前に、次を実行して結果を確認する。
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" git-lfs-free-plan-status --remote-name origin
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" git-lfs-free-plan-status --remote-name origin
 ```
 
 - 上のコマンドが非 0 で終わったら、push してはいけない。
@@ -53,10 +53,10 @@ python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" git-l
 - 同じ GitHub アカウントで他のリポジトリでも LFS を使うときは、予約分を差し引いて判定する。
 
 ```bash
-git -C "$TEAM_INFO_ROOT" config team-info.lfsReservedBytes <バイト数>
+git -C "$JMTY_ROOT" config jmty.lfsReservedBytes <バイト数>
 ```
 
-- 予約分を一時的に環境変数で渡すなら、macOS / Linux は `TEAM_INFO_GIT_LFS_RESERVED_BYTES`、Windows は `$env:TEAM_INFO_GIT_LFS_RESERVED_BYTES` を使う。
+- 予約分を一時的に環境変数で渡すなら、macOS / Linux は `JMTY_GIT_LFS_RESERVED_BYTES`、Windows は `$env:JMTY_GIT_LFS_RESERVED_BYTES` を使う。
 
 ## Discord 報告（任意）
 - `/git` の push / プルリクエスト完了後は、ユーザーに Discord 報告を送るか確認する。送ると決まった場合だけ Discord へ報告する。Webhook が未設定の場合のみスキップしてよい。
@@ -65,12 +65,12 @@ git -C "$TEAM_INFO_ROOT" config team-info.lfsReservedBytes <バイト数>
 - 読み取り順は `--webhook-url` → 環境変数 → `config/discord-git-webhook.json` → ローカル設定 の順にする。
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-webhook-shared-set --url "<Discord Webhook URL>"
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-webhook-shared-path
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-webhook-set --url "<Discord Webhook URL>"
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-webhook-status
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-webhook-clear
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-webhook-shared-clear
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-shared-set --url "<Discord Webhook URL>"
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-shared-path
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-set --url "<Discord Webhook URL>"
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-status
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-clear
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-shared-clear
 ```
 
 - Discord に送る本文は、変更ファイル名を先に出しつつ、「何をしたか」と「何が変わったの？」を分けて、小学生にもわかる短い文へまとめる。
@@ -79,11 +79,11 @@ python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" disco
 - push / PR が成功したあと、`/git` で報告を送ると決まった場合に、次のどちらかを実行する。
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-report --event push --base-sha "<push前に控えた origin/main の SHA>" --head-sha HEAD
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-report --event push --base-sha "<push前に控えた origin/main の SHA>" --head-sha HEAD
 ```
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-report --event pr --base-sha "<push前に控えた origin/main の SHA>" --head-sha HEAD --pr-title "<PR タイトル>" --pr-url "<PR URL>"
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-report --event pr --base-sha "<push前に控えた origin/main の SHA>" --head-sha HEAD --pr-title "<PR タイトル>" --pr-url "<PR URL>"
 ```
 
 - `/git` では、ユーザーが Discord 報告を送ると言ったときだけこのコマンドを実行する。
@@ -136,7 +136,7 @@ python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" disco
 ## コミット前の説明と承認 (`git commit`)
 - 未コミットの変更がない場合はこのステップをスキップする。
 - コミットを実行する前に、以下の手順を踏むこと。
-  1. `git -C "$TEAM_INFO_ROOT" diff --staged` 等で変更内容を確認する。
+  1. `git -C "$JMTY_ROOT" diff --staged` 等で変更内容を確認する。
   2. ユーザーに対して、今回の変更内容を小学生にもわかるように説明する。
   3. 作成したコミットメッセージ案（要約 + 詳細）を提示する。
   4. 「この内容でコミットして良いですか？」と承認を求める。
@@ -161,34 +161,34 @@ python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" disco
 手元の変更をリモートへ反映するためのフローです。オーナー機だけは `origin/main` に一本道で繋げ、その他のパソコンでは作業ブランチから `main` へのプルリクエストにします。
 
 **【手順A】まず `fetch` で更新の有無を見る:**
-- 最初に `git -C "$TEAM_INFO_ROOT" fetch origin` を実行する。
+- 最初に `git -C "$JMTY_ROOT" fetch origin` を実行する。
 - **【重要: 通信ハングアップ・タイムアウト対策】**
   動画・音声などの巨大なファイルを扱うため、PCのメモリ・通信環境によって過去の巨大な履歴（Packファイル等）のダウンロードで `Operation canceled` や無応答（3分以上など）になることがあります。
   もし応答がない、または巨大ファイル起因で fetch に失敗する兆候を見た場合は、履歴の全取得をやめ、ただちに以下のシャローフェッチ（Shallow Fetch）に切り替えてください。
-  `git -C "$TEAM_INFO_ROOT" fetch origin main --depth=1`
+  `git -C "$JMTY_ROOT" fetch origin main --depth=1`
 - `origin/main` に更新がない場合は、`pull --rebase` は省略してよい。
 - 更新がある場合だけ、次のスタッシュと `pull --rebase` の手順へ進む。
 
 ```bash
 # 通常時
-git -C "$TEAM_INFO_ROOT" fetch origin
+git -C "$JMTY_ROOT" fetch origin
 # タイムアウト・フェッチ失敗時の緊急回避（シャローフェッチ）
-git -C "$TEAM_INFO_ROOT" fetch origin main --depth=1
+git -C "$JMTY_ROOT" fetch origin main --depth=1
 ```
 
 **【手順B】pull が必要なときだけ未コミット変更を避難する:**
-- `git -C "$TEAM_INFO_ROOT" status --porcelain` で未コミットの変更があるか確認する。
+- `git -C "$JMTY_ROOT" status --porcelain` で未コミットの変更があるか確認する。
 - 変更がある場合は、一旦スタッシュに避難させる。
 
 ```bash
-git -C "$TEAM_INFO_ROOT" stash push -u -m "automated git-workflow stash"
+git -C "$JMTY_ROOT" stash push -u -m "automated git-workflow stash"
 ```
 
 **【手順C】更新があるときだけ `pull --rebase` する:**
 - リモートの更新がある場合だけ `main` ブランチに取り込む。
 
 ```bash
-git -C "$TEAM_INFO_ROOT" pull --rebase origin main
+git -C "$JMTY_ROOT" pull --rebase origin main
 ```
 
 - 競合が発生した場合:
@@ -203,14 +203,14 @@ git -C "$TEAM_INFO_ROOT" pull --rebase origin main
 - プッシュ前に LFS 容量チェックを行い、エラーがなければ次へ進む。
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" git-lfs-free-plan-status --remote-name origin
-OWNER_STATUS="$(python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" owner-status)"
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" git-lfs-free-plan-status --remote-name origin
+OWNER_STATUS="$(python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" owner-status)"
 ```
 
 - `OWNER_STATUS` が `owner` の場合:
 
 ```bash
-git -C "$TEAM_INFO_ROOT" push origin main
+git -C "$JMTY_ROOT" push origin main
 ```
 
 - `OWNER_STATUS` が `other` の場合:
@@ -222,27 +222,27 @@ git -C "$TEAM_INFO_ROOT" push origin main
   6. `/git` では、PR URL を入れて Discord に PR 報告する。`/git-nd` では Discord 報告しない。
 
 ```bash
-CURRENT_BRANCH="$(git -C "$TEAM_INFO_ROOT" branch --show-current)"
+CURRENT_BRANCH="$(git -C "$JMTY_ROOT" branch --show-current)"
 GITHUB_ACCOUNT="$(gh api user --jq .login)"
 if [ "$CURRENT_BRANCH" = "main" ] || ! printf '%s\n' "$CURRENT_BRANCH" | grep -F -q "$GITHUB_ACCOUNT"; then
   CURRENT_BRANCH="agent/${GITHUB_ACCOUNT}/$(date +%Y%m%d-%H%M%S)-git"
-  git -C "$TEAM_INFO_ROOT" switch -c "$CURRENT_BRANCH"
+  git -C "$JMTY_ROOT" switch -c "$CURRENT_BRANCH"
 fi
-git -C "$TEAM_INFO_ROOT" push -u origin "$CURRENT_BRANCH"
+git -C "$JMTY_ROOT" push -u origin "$CURRENT_BRANCH"
 PR_URL="$(gh pr create --base main --head "$CURRENT_BRANCH" --title "<PR タイトル>" --body "<PR 説明>")"
 ```
 
 - `other` の場合、Discord 報告の event は `pr` とし、PR URL を入れる。`/git` でユーザーが Discord 報告を送ると言った場合だけ次を実行する。
 
 ```bash
-python "$TEAM_INFO_ROOT/.agent/skills/common/scripts/team_info_runtime.py" discord-git-report --event pr --base-sha "<push前に控えた origin/main の SHA>" --head-sha HEAD --branch "$CURRENT_BRANCH" --pr-title "<PR タイトル>" --pr-url "$PR_URL"
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-report --event pr --base-sha "<push前に控えた origin/main の SHA>" --head-sha HEAD --branch "$CURRENT_BRANCH" --pr-title "<PR タイトル>" --pr-url "$PR_URL"
 ```
 
 **【手順E】避難した変更を戻す:**
 - 手順Bでスタッシュした場合は、ここで戻す。
 
 ```bash
-git -C "$TEAM_INFO_ROOT" stash pop
+git -C "$JMTY_ROOT" stash pop
 ```
 
 - `stash pop` で競合が起きた場合も、差分の違いを説明してからユーザー確認を取る。
@@ -251,4 +251,4 @@ git -C "$TEAM_INFO_ROOT" stash pop
 - 全員まずは `main` ブランチ上にとどまり、そこで変更のステージングとコミットを行う。
 - ただし `owner-status` が `other` の場合は、コミット前または反映前に作業ブランチへ切り替え、`main` へ直接 push しない。
 - `fetch` の時点で更新がなければ、無理に `pull --rebase` を実行しない。
-- push 判断でオーナー確認が必要なときは、`team_info_runtime.py owner-status` の結果で判定する。
+- push 判断でオーナー確認が必要なときは、`jmty_runtime.py owner-status` の結果で判定する。
