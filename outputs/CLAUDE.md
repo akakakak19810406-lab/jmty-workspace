@@ -7,8 +7,8 @@
 
 | フォルダ | 用途 | 対応スキル |
 |---|---|---|
-| `jmty/factory/` | 工場求人向け投稿文 | `jmty-posts-factory-14` |
-| `jmty/remote/` | 在宅求人向け投稿文 | `jmty-posts-remote-14` |
+| `jmty/factory/` | 工場求人向け投稿文 | `jmty-posts` |
+| `jmty/remote/` | 在宅求人向け投稿文 | `jmty-posts` |
 
 ## 注意
 

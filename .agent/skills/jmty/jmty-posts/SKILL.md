@@ -1,36 +1,107 @@
 ---
 name: jmty-posts
-description: ジモティー投稿文を作成するオーケストレータースキル。「工場求人」または「在宅求人」を選択し、適切なサブスキル（jmty-posts-factory-14 / jmty-posts-remote-14）に処理を委譲します。各サブスキルは14パターンの投稿文を生成し保存します。
+description: JMTY workspace の統合スキル。ジモティ投稿文作成、週次画像素材処理、画像整理、Google Drive 同期をこの入口だけで扱う。
 ---
 
-# ジモティー投稿 親スキル
+# JMTY 統合スキル
 
-## 目的
-ユーザーが希望する投稿タイプ（工場/在宅）に基づき、各専門スキルを実行して高品質な投稿文を大量生成する。
+## 役割
+この repo でジモティ関連の制作・整理を行うときは、原則このスキルだけを読む。
+工場求人、在宅求人、14パターン投稿、画像素材、Drive 同期は個別スキルとして探さず、このスキル内の作業タイプで切り替える。
 
-## 使用方法
-1. このスキルを実行する。
-2. 提示される選択肢から「工場求人」または「在宅求人」を選ぶ。
-3. スキルが自動的に対応するサブスキルを呼び出し、完了まで待機する。
+## 作業タイプ
+
+| 依頼内容 | このスキルでの扱い |
+|---|---|
+| 工場求人の投稿文を作る | `factory` |
+| 在宅求人の投稿文を作る | `remote` |
+| 案件ファイルから14本の投稿文を作る | `variants` |
+| 週次の画像・投稿素材を処理する | `weekly-assets` |
+| スプレッドシート画像と Drive フォルダを整理する | `image-organize` |
+| 投稿出力を共有ストレージへ同期する | `sync` |
+
+## 共通ルール
+- 公式LINEの導線は `【公式LINEURL】` を使う。固定URLを本文に直書きしない。
+- 会社名や固有案件名は原則出さず、匿名表現にする。
+- 「注意事項」見出しは入れない。
+- アカウント間で、書き出し、訴求軸、対象人物像、口調、CTA が偏らないようにする。
+- 出力は `outputs/` 配下へ置き、入力素材は `inputs/` に混ぜない。
+- 画像生成や画像整理で外部 API / Google Drive / Google Sheets を使う場合は、実行前に対象と変更内容を確認する。
 
 ## 入力
-- ユーザー選択: 工場求人 / 在宅求人
-- 元データ:
-    - 工場: `inputs/jmty_factory_cases/`
-    - 在宅: `inputs/jmty_remote_samples/`
+- 工場求人素材: `inputs/jmty_factory_cases/`
+- 在宅求人素材: `inputs/jmty_remote_samples/`
+- 営業スプレッドシート: `ジモティー営業` の `アカウント情報` シート
+- 週次素材処理: `.agent/skills/nanobanana-banner-gen/scripts/jmty_weekly_assets.py`
 
 ## 出力
-- 14個のフォルダに分割された投稿文セット
-- 各フォルダには `subject.txt` と `body.txt` が含まれる
-- 保存先: カレントディレクトリ配下の新規フォルダ（例: `result_factory_01/`など）
+- 週次出力: `outputs/jmty-weekly/current/<アカウント名>/`
+- 工場投稿: `outputs/jmty-weekly/current/<アカウント名>/工場の投稿文章.md`
+- 在宅投稿: `outputs/jmty-weekly/current/<アカウント名>/在宅1の投稿文章.md` / `在宅2の投稿文章.md`
+- 単体出力: `outputs/jmty/factory/` / `outputs/jmty/remote/`
+- 汎用14パターン: `outputs/jmty/legacy_variants/<timestamp>/`
 
-## サブスキル
-- 工場求人14本: `jmty-posts-factory-14` (./jmty-posts-factory-14/SKILL.md)
-- 在宅求人14本: `jmty-posts-remote-14` (./jmty-posts-remote-14/SKILL.md)
+## factory: 工場求人投稿
+1. `inputs/jmty_factory_cases/` から案件ファイルを選ぶ。
+2. `アカウント情報` シートの `J列` に投稿文がある行を対象にする。
+3. `H列` の担当エリアを県名として使い、市区町村は人口上位候補から重み付きで選ぶ。
+4. 各投稿に `勤務地: 〇〇県〇〇市` と `【公式LINEURL】` を入れる。
+5. 保存先は `outputs/jmty-weekly/current/<アカウント名>/工場の投稿文章.md`。
 
-## 必須フロー
-1. まず作成タイプを確認する。
-- 工場求人14本
-- 在宅求人14本
-2. 選択タイプに対応するサブスキルを実行する。
-3. 親スキル自身は投稿本文を作成しない。
+## remote: 在宅求人投稿
+1. `inputs/jmty_remote_samples/` から見本ファイルを選ぶ。
+2. `アカウント情報` シートの `S列` または `U列` に投稿文がある行を対象にする。
+3. `Q列` の担当エリアは導入文や地域呼びかけにだけ使う。
+4. 勤務地は `完全在宅（全国どこからでも応募OK）` の意味が伝わる表現にする。
+5. `未経験OK` と `【公式LINEURL】` を必ず入れる。
+6. 文体テンプレートは内部テンプレートから割り当てる。
+   - `.agent/skills/jmty/jmty-posts/jmty-posts-remote-14/assets/post_templates/`
+
+## variants: 汎用14パターン投稿
+1. ユーザー指定の案件ファイル、または `inputs/` 配下の候補から1つ選ぶ。
+2. 14本を別案件・別会社に見えるように書き分ける。
+3. 次の差別化軸を重複させない。
+   - 業種、職種、ターゲット、働き方、訴求軸、冒頭フック
+4. 出力初期化が必要な場合は内部スクリプトを使う。
+   - `.agent/skills/jmty/jmty-posts/jmty-posts-14-variants/scripts/init_output_dirs.py`
+
+## weekly-assets: 週次画像・投稿素材
+週次の画像素材、投稿文、Drive 反映までまとめて処理したい場合に使う。
+
+```bash
+python "$JMTY_ROOT/.agent/skills/nanobanana-banner-gen/scripts/jmty_weekly_assets.py"
+```
+
+このスクリプトは画像生成・Drive 更新・スプレッドシート更新を含み得るため、実行前に対象アカウント、上書き対象、出力先を確認する。
+
+## image-organize: 画像整理
+既存画像の場所と名前を整理する。新しい画像生成はしない。
+
+調査のみ:
+```bash
+python "$JMTY_ROOT/.agent/skills/jmty/jmty-image-organizer/scripts/investigate_spreadsheet.py"
+```
+
+整理・修復:
+```bash
+python "$JMTY_ROOT/.agent/skills/jmty/jmty-image-organizer/scripts/organize_images.py"
+```
+
+## sync: 投稿出力同期
+`outputs/jmty/factory` と `outputs/jmty/remote` を共有ストレージへ同期する。
+
+```bash
+python "$JMTY_ROOT/.agent/skills/jmty/jmty-posts/jmty-posts-gdrive-sync/scripts/sync_jmty_posts_to_gdrive.py"
+```
+
+コピー先を指定する場合:
+```bash
+python "$JMTY_ROOT/.agent/skills/jmty/jmty-posts/jmty-posts-gdrive-sync/scripts/sync_jmty_posts_to_gdrive.py" "/destination/root/absolute/path"
+```
+
+## 完了報告
+- 実行した作業タイプ
+- 入力ファイルまたは対象シート
+- 出力先
+- 生成・更新・同期した件数
+- 追加確認が必要な点

@@ -10,15 +10,15 @@
 
 ## Writing Manager
 - 役割: ジモティ投稿文の作成、見出し、本文、テンプレ差分の確認
-- 主担当スキル: `jmty-posts` / `jmty-posts-factory-14` / `jmty-posts-remote-14` / `jmty-posts-14-variants`
+- 主担当スキル: `jmty-posts`
 
 ## Automation Manager
 - 役割: Google Drive 同期、定型処理、週次素材処理
-- 主担当スキル: `jmty-posts-gdrive-sync` / `gdrive-copy` / `jmty-weekly-assets`
+- 主担当スキル: `jmty-posts` / `gdrive-copy`
 
 ## Media Manager
 - 役割: JMTY 週次素材・画像整理に関係するメディア処理
-- 主担当スキル: `jmty-image-organizer` / `jmty-weekly-assets`
+- 主担当スキル: `jmty-posts`
 
 ## Research Manager
 - 役割: JMTY 投稿に必要な求人素材・掲載条件・表現確認

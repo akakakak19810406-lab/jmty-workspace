@@ -7,8 +7,8 @@
 
 | フォルダ | 用途 | 対応スキル |
 |---|---|---|
-| `jmty_factory_cases/` | 工場求人の案件素材 | `jmty-posts-factory-14` |
-| `jmty_remote_samples/` | 在宅求人の見本・職種リスト | `jmty-posts-remote-14` |
+| `jmty_factory_cases/` | 工場求人の案件素材 | `jmty-posts` |
+| `jmty_remote_samples/` | 在宅求人の見本・職種リスト | `jmty-posts` |
 
 ## 注意
 

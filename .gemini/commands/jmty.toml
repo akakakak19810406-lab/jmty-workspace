@@ -1,4 +1,4 @@
-description = "ジモティー投稿文スキルを起動する"
+description = "ジモティー統合スキルを起動する"
 prompt = """
 この command は JMTY workspace 専用です。
 まずカレントディレクトリに AGENTS.md があることを確認し、その内容を正本として扱ってください。
