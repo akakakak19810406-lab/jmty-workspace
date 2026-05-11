@@ -663,6 +663,19 @@ def sanitize_name(value: str) -> str:
     return cleaned or "未設定アカウント"
 
 
+def strip_markdown_markers(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    cleaned_lines = []
+    for line in value.splitlines():
+        cleaned = re.sub(r"^\s{0,3}[#＃]{1,6}\s*", "", line.rstrip())
+        cleaned = cleaned.replace("#", "").replace("＃", "")
+        cleaned = cleaned.replace("*", "").replace("＊", "")
+        cleaned_lines.append(cleaned.rstrip())
+    return "\n".join(cleaned_lines).strip()
+
+
 def fenced(text: str) -> str:
     return f"```text\n{text.rstrip()}\n```"
 
@@ -712,6 +725,7 @@ def build_banner_prompt(
     prompt_template: str = "",
     prompt_template_name: str = "",
 ) -> str:
+    post_text = strip_markdown_markers(post_text)
     region_text = clean_display_text(region)
     template_values = {
         "account_name": account_name,
@@ -869,23 +883,44 @@ def render_prompt_document(task: dict | Task, image_path: Path, post_text: str, 
 
 
 def sheet_post_text(task_kind: str, post_text: str) -> str:
-    lines = [line.rstrip() for line in post_text.splitlines()]
+    lines = [line.rstrip() for line in strip_markdown_markers(post_text).splitlines()]
     if "## 本文" in lines:
         start = lines.index("## 本文") + 1
         lines = lines[start:]
+    elif "本文" in lines:
+        start = lines.index("本文") + 1
+        lines = lines[start:]
 
     body_lines: list[str] = []
+    section_headings = {
+        "仕事内容詳細",
+        "具体的な業務",
+        "サポート体制",
+        "募集概要",
+        "住まいについて",
+        "FAQ",
+        "応募導線",
+        "在宅でも安心して続けやすい理由",
+        "研修・立ち上がりステップ",
+        "報酬イメージ（目安）",
+        "応募条件（詳細）",
+        "こんな方に特に向いています",
+        "選考〜開始までの流れ",
+        "最後に",
+    }
     for line in lines:
         if line.startswith("## "):
             break
         if line.startswith("# "):
             continue
+        if body_lines and line.strip() in section_headings:
+            break
         if line.strip() == "":
             continue
         body_lines.append(line)
 
     body = "\n".join(body_lines).strip()
-    return body or post_text
+    return body or strip_markdown_markers(post_text)
 
 
 def choose_post_variation(account_no: str, row_idx: int, task_type: str) -> tuple[str, str]:
@@ -1082,7 +1117,7 @@ def build_post_text(
             *details,
         ]
     )
-    return post_text, salary_text
+    return strip_markdown_markers(post_text), salary_text
 
 
 def post_filename_for_label(label_ja: str) -> str:
@@ -1152,6 +1187,8 @@ def validate_post_text(task: dict, post_text: str) -> None:
         raise RuntimeError(f"投稿文に公式LINEプレースホルダーがありません: {task['account_name']} / {task['label_ja']}")
     if re.search(r"https?://|lin\.ee|line\.me", post_text, flags=re.IGNORECASE):
         raise RuntimeError(f"投稿文に実URLらしき文字列があります: {task['account_name']} / {task['label_ja']}")
+    if re.search(r"[#＃*＊]", post_text):
+        raise RuntimeError(f"投稿文にMarkdown装飾記号が残っています: {task['account_name']} / {task['label_ja']}")
     if task["kind"] == "factory" and "完全在宅" in post_text:
         raise RuntimeError(f"工場投稿文に在宅系の文言があります: {task['account_name']} / {task['label_ja']}")
     if task["kind"] in {"remote1", "remote2"} and "完全在宅" not in post_text:
@@ -1168,7 +1205,7 @@ def validate_task_files(output_root: Path, tasks: list[dict]) -> dict:
         post_path = account_dir / Path(task["post_relpath"]).name
         if not post_path.exists():
             raise FileNotFoundError(f"投稿文章が見つかりません: {post_path}")
-        post_text = post_path.read_text(encoding="utf-8")
+        post_text = strip_markdown_markers(post_path.read_text(encoding="utf-8"))
         validate_post_text(task, post_text)
         if image_path.exists():
             validate_image_kind(image_path, task["kind"], task["account_name"])
@@ -1339,7 +1376,10 @@ def write_prepare_output(output_root: Path, tasks: list[Task]) -> None:
 
             # 既存の投稿文ファイルがあればその内容を優先して使う
             if post_path.exists():
-                existing_text = post_path.read_text(encoding="utf-8")
+                raw_existing_text = post_path.read_text(encoding="utf-8")
+                existing_text = strip_markdown_markers(raw_existing_text)
+                if existing_text != raw_existing_text.strip():
+                    post_path.write_text(existing_text + "\n", encoding="utf-8")
                 task.post_text = existing_text
                 task.salary_text = extract_salary_text(existing_text, task.kind)
                 task.prompt_text = build_banner_prompt(
@@ -1506,7 +1546,21 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
         image_exists = image_path.exists()
         if not post_path.exists():
             raise FileNotFoundError(f"投稿文章が見つかりません: {post_path}")
-        validate_post_text(task, post_path.read_text(encoding="utf-8"))
+        raw_post_text = post_path.read_text(encoding="utf-8")
+        cleaned_post_text = strip_markdown_markers(raw_post_text)
+        if cleaned_post_text != raw_post_text.strip():
+            post_path.write_text(cleaned_post_text + "\n", encoding="utf-8")
+        task["post_text"] = cleaned_post_text
+        task["salary_text"] = extract_salary_text(cleaned_post_text, task["kind"])
+        task["prompt_text"] = build_banner_prompt(
+            task["kind"],
+            task["region"],
+            cleaned_post_text,
+            account_name,
+            task["salary_text"],
+            extract_role_phrase(cleaned_post_text, task["kind"]),
+        )
+        validate_post_text(task, cleaned_post_text)
         if image_exists and image_path.name != expected_image_filename(task["kind"]):
             raise RuntimeError(
                 f"画像ファイル名が期待値と一致しません: {account_name} / {task['kind']} -> {image_path.name}"
