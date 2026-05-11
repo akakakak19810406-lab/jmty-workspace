@@ -9,15 +9,20 @@ import random
 import shutil
 import subprocess
 import ssl
+import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+import urllib.error
+import urllib.request
 
 
 SPREADSHEET_ID = "1GKBTHwBS6W0D30X_yK7vqsaDRWw3p1tXM7lnFhyb0Uw"
 SHEET_NAME = "アカウント情報"
 PARENT_FOLDER_ID = "16P5sOzyJHLemwURON6Wf1i7NjodK3WWF"
 DEFAULT_OUTPUT_ROOT = Path("outputs/jmty-weekly/current")
-FACTORY_CASES_PATH = Path("/Users/deguchishouma/jmty/inputs/jmty_factory_cases/2026-02_案件一覧.md")
+DEFAULT_PROMPT_TEMPLATES_DIR = Path("inputs/jmty_image_prompt_templates")
+FACTORY_CASES_PATH = Path(os.environ.get("JMTY_FACTORY_CASES_PATH", "inputs/jmty_factory_cases/2026-02_案件一覧.md"))
 
 FACTORY_REGION_INDEX = 7   # H
 FACTORY_IMAGE_COL = "I"
@@ -28,6 +33,11 @@ REMOTE1_POST_INDEX = 18    # S
 REMOTE2_IMAGE_COL = "T"
 REMOTE2_POST_INDEX = 20    # U
 ROTATION_REPORT_FILENAME = "rotation_report.md"
+IMAGE_ONLY_DIRNAME = "_drive_images"
+IMPROVEMENT_REPORT_DIRNAME = "_improvement_reports"
+DISCORD_JMTY_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_JMTY_WEBHOOK_URL"
+DISCORD_JMTY_WEBHOOK_PATH = Path("config") / "discord-jmty-webhook.json"
+DISCORD_CONTENT_LIMIT = 1900
 
 EXPECTED_IMAGE_FILENAMES = {
     "factory": "工場.jpg",
@@ -45,6 +55,29 @@ CTA_VARIANTS = [
     "LINE登録だけでOK！あとはボタンを押すだけ！",
     "まずはLINE追加！10秒で問い合わせ完了！",
 ]
+
+POST_VARIATION_THEMES = [
+    ("安定志向", "長期で落ち着いて続けたい方向けに、安定感と定着しやすさを前面に出す。"),
+    ("高収入志向", "収入目安と生活の立て直しやすさをわかりやすく伝える。"),
+    ("未経験歓迎", "はじめてでも進めやすい手順・研修・サポートを中心に書く。"),
+    ("生活両立", "家庭や自分の時間と両立しやすい働き方を訴求する。"),
+    ("時間帯メリット", "勤務時間・シフト・在宅時間の使いやすさを訴求する。"),
+    ("若手成長", "経験を積みながらできることを増やせる流れを伝える。"),
+    ("再挑戦", "ブランクや転職回数を気にしすぎず相談できる温度感にする。"),
+    ("経験活用", "過去の接客・事務・製造・PC経験などを活かせる見せ方にする。"),
+    ("地域訴求", "投稿地域の人が自分ごとに感じやすい導入にする。"),
+    ("作業明確", "仕事内容を具体的に見せ、不安を減らす。"),
+    ("デスクワーク志向", "落ち着いた作業、入力、確認、文章作成などの進めやすさを訴求する。"),
+    ("スピード相談", "まず条件確認だけでも進められる軽い応募導線にする。"),
+    ("生活支援", "住まい・保険・サポートなど生活面の安心材料を伝える。"),
+    ("柔軟な環境", "相談しやすさ、働き方の調整、続けやすい雰囲気を出す。"),
+]
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+class JmtyWeeklyAssetsError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -64,9 +97,38 @@ class Task:
     post_filename: str
     prompt_filename: str
     prompt_text: str
+    prompt_template_name: str = ""
+    prompt_template: str = ""
+
+
+def resolve_gws_executable() -> str:
+    explicit = os.environ.get("JMTY_GWS_BIN") or os.environ.get("GWS_BIN")
+    candidates = [explicit] if explicit else ["gws", "gws.cmd"]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        expanded = str(Path(candidate).expanduser()) if "/" in candidate else candidate
+        found = shutil.which(expanded)
+        if found:
+            return found
+        if "/" in expanded and Path(expanded).exists():
+            return expanded
+    raise JmtyWeeklyAssetsError(
+        "\n".join(
+            [
+                "Google Workspace CLI `gws` が見つかりません。",
+                "このスクリプトの rotate-sheet / prepare / sync-drive は、スプレッドシートやDriveを読むために `gws` が必要です。",
+                "対応方法:",
+                "- `gws` をPATHへ入れてから再実行する",
+                "- 別名やフルパスで入っている場合は `JMTY_GWS_BIN=/path/to/gws` を指定する",
+                "- ChromeだけでDriveを開く運用でも、prepare用のシート読取には `gws` か同等の入力が必要です",
+            ]
+        )
+    )
 
 
 def run_gws(args: list[str]) -> dict:
+    gws_executable = resolve_gws_executable()
     verify_paths = ssl.get_default_verify_paths()
     shell_cmd = (
         "export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file; "
@@ -80,7 +142,7 @@ def run_gws(args: list[str]) -> dict:
             if verify_paths.capath
             else ""
         )
-        + " ".join(_shell_quote(part) for part in ["gws", *args])
+        + " ".join(_shell_quote(part) for part in [gws_executable, *args])
     )
     result = subprocess.run(
         ["/bin/zsh", "-lc", shell_cmd],
@@ -90,7 +152,8 @@ def run_gws(args: list[str]) -> dict:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise JmtyWeeklyAssetsError(f"`gws` の実行に失敗しました:\n{detail}")
     stdout = result.stdout.strip()
     if stdout.startswith("Using keyring backend: file"):
         stdout = stdout.split("\n", 1)[1].strip()
@@ -99,6 +162,170 @@ def run_gws(args: list[str]) -> dict:
 
 def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _clip_discord_content(text: str) -> str:
+    if len(text) <= DISCORD_CONTENT_LIMIT:
+        return text
+    return text[: DISCORD_CONTENT_LIMIT - 4].rstrip() + " ..."
+
+
+def get_discord_jmty_webhook_url(repo_root: Path | None = None) -> tuple[str | None, str | None]:
+    env_value = os.environ.get(DISCORD_JMTY_WEBHOOK_URL_ENV)
+    if env_value and env_value.strip():
+        return env_value.strip(), "env"
+
+    resolved_root = repo_root or Path.cwd()
+    config_path = resolved_root / DISCORD_JMTY_WEBHOOK_PATH
+    if not config_path.exists():
+        return None, None
+    try:
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(loaded, dict):
+        return None, None
+    url = str(loaded.get("url", "")).strip()
+    return (url, "config") if url else (None, None)
+
+
+def post_discord_jmty_message(content: str, repo_root: Path | None = None) -> bool:
+    webhook_url, source = get_discord_jmty_webhook_url(repo_root)
+    if not webhook_url:
+        print("Discord jmty webhook URL が未設定のため、通知はスキップしました。", file=sys.stderr)
+        return False
+
+    payload = json.dumps(
+        {"content": _clip_discord_content(content), "username": "JMTY改善メモ"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        webhook_url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "jmty-weekly-assets/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status not in {200, 204}:
+                print(f"Discord 通知に失敗しました: status={response.status}", file=sys.stderr)
+                return False
+    except urllib.error.URLError as exc:
+        print(f"Discord 通知に失敗しました: {exc}", file=sys.stderr)
+        return False
+
+    print(f"discord:sent:{source}", file=sys.stderr)
+    return True
+
+
+def classify_failure(exc: BaseException) -> tuple[str, list[str], list[str]]:
+    message = str(exc)
+    lowered = message.lower()
+    if "gws" in lowered and ("見つかりません" in message or "command not found" in lowered):
+        return (
+            "GWS CLI 未検出",
+            [
+                "`gws` の場所を `JMTY_GWS_BIN` / `GWS_BIN` で指定できるようにしておく",
+                "将来の改善候補: シート内容をCSV/JSONで渡せるローカル入力モードを追加する",
+            ],
+            [
+                "`gws` がPATHにないと週次処理を開始できないことを自動判定",
+                "次に必要な設定をエラー本文と改善レポートに出力",
+            ],
+        )
+    if "tasks.json" in message:
+        return (
+            "tasks.json 未生成",
+            [
+                "`prepare` が完了してから画像生成・検証へ進むガードを強化する",
+                "将来の改善候補: 既存タスクがない場合に入力不足一覧を自動作成する",
+            ],
+            [
+                "画像生成前の前提ファイル不足を自動判定",
+                "再実行すべきコマンドを改善レポートに残す",
+            ],
+        )
+    if "permission" in lowered or "operation not permitted" in lowered or "権限" in message:
+        return (
+            "権限エラー",
+            [
+                "書き込み先を workspace 配下または `/private/tmp` に寄せる",
+                "キャッシュ生成が原因の場合は `PYTHONPYCACHEPREFIX=/private/tmp/jmty-pycache` を使う",
+            ],
+            [
+                "権限系の失敗を自動判定",
+                "安全な書き込み先の候補を改善レポートに残す",
+            ],
+        )
+    return (
+        "未分類エラー",
+        [
+            "エラー本文と実行コマンドをもとに再発防止策を追加する",
+            "同じ失敗が繰り返される場合は known error として分類ルールを増やす",
+        ],
+        [
+            "未分類でも改善レポートとDiscord通知の対象にする",
+            "次回以降の分類追加に使える情報を保存する",
+        ],
+    )
+
+
+def write_improvement_report(command: str, output_root: Path, exc: BaseException) -> Path | None:
+    category, proposals, automated = classify_failure(exc)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_dir = output_root / IMPROVEMENT_REPORT_DIRNAME
+    report_path = report_dir / f"{timestamp}_{command}.md"
+    lines = [
+        f"# JMTY週次処理 改善レポート {timestamp}",
+        "",
+        f"- コマンド: `{command}`",
+        f"- 分類: {category}",
+        f"- エラー種別: `{type(exc).__name__}`",
+        "",
+        "## エラー概要",
+        "```text",
+        str(exc).strip(),
+        "```",
+        "",
+        "## 自動で行った改善プロセス",
+        *[f"- {item}" for item in automated],
+        "",
+        "## 次の改善候補",
+        *[f"- {item}" for item in proposals],
+        "",
+    ]
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        return report_path
+    except OSError as write_exc:
+        print(f"改善レポートを書き込めませんでした: {write_exc}", file=sys.stderr)
+        return None
+
+
+def notify_improvement(command: str, output_root: Path, exc: BaseException, report_path: Path | None) -> None:
+    category, proposals, automated = classify_failure(exc)
+    report_line = f"- レポート: `{report_path}`" if report_path else "- レポート: 作成失敗"
+    content = "\n".join(
+        [
+            "【ジモティ週次処理 改善メモ】",
+            f"- コマンド: `{command}`",
+            f"- 分類: {category}",
+            f"- 改善済み: {automated[0] if automated else '改善レポート化'}",
+            f"- 次の改善案: {proposals[0] if proposals else '分類ルールを追加'}",
+            report_line,
+        ]
+    )
+    post_discord_jmty_message(content)
+
+
+def record_and_notify_failure(command: str, output_root: Path, exc: BaseException) -> Path | None:
+    report_path = write_improvement_report(command, output_root, exc)
+    notify_improvement(command, output_root, exc, report_path)
+    return report_path
 
 
 def read_sheet_rows() -> list[list[str]]:
@@ -200,6 +427,34 @@ def delete_drive_files_by_name(parent_id: str, name: str) -> None:
     )
     for file in res.get("files", []):
         delete_drive_file(file["id"])
+
+
+def delete_drive_image_files(parent_id: str) -> int:
+    name_filters = " or ".join(f"name contains '{ext}'" for ext in sorted(IMAGE_EXTENSIONS))
+    res = run_gws(
+        [
+            "drive",
+            "files",
+            "list",
+            "--params",
+            json.dumps(
+                {
+                    "q": (
+                        f"'{parent_id}' in parents and trashed = false and "
+                        f"(mimeType contains 'image/' or {name_filters})"
+                    ),
+                    "fields": "files(id,name,mimeType)",
+                    "pageSize": 1000,
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    deleted = 0
+    for file in res.get("files", []):
+        delete_drive_file(file["id"])
+        deleted += 1
+    return deleted
 
 
 def replace_drive_file(file_path: Path, parent_id: str) -> str:
@@ -412,8 +667,65 @@ def fenced(text: str) -> str:
     return f"```text\n{text.rstrip()}\n```"
 
 
-def build_banner_prompt(task_type: str, region: str, post_text: str, account_name: str, salary_text: str, role_phrase: str) -> str:
+def load_prompt_templates(templates_dir: Path, task_type: str) -> list[tuple[str, str]]:
+    if not templates_dir.exists():
+        return []
+
+    candidates = []
+    aliases = {
+        "factory": ("factory", "工場", "all", "common", "共通"),
+        "remote1": ("remote", "remote1", "在宅", "在宅1", "all", "common", "共通"),
+        "remote2": ("remote", "remote2", "在宅", "在宅2", "all", "common", "共通"),
+    }.get(task_type, ("all", "common", "共通"))
+
+    for path in sorted(templates_dir.glob("*.md")) + sorted(templates_dir.glob("*.txt")):
+        stem = path.stem.lower()
+        if any(alias.lower() in stem for alias in aliases):
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                candidates.append((path.name, text))
+    return candidates
+
+
+def choose_prompt_template(templates_dir: Path, task_type: str, account_no: str, row_idx: int, label_ja: str) -> tuple[str, str]:
+    templates = load_prompt_templates(templates_dir, task_type)
+    if not templates:
+        return "", ""
+    rng = random.Random(f"{account_no}:{row_idx}:{task_type}:{label_ja}:prompt-template")
+    return templates[rng.randrange(len(templates))]
+
+
+def render_prompt_template(template_text: str, values: dict[str, str]) -> str:
+    rendered = template_text
+    for key, value in values.items():
+        rendered = rendered.replace("{{" + key + "}}", value)
+    return rendered
+
+
+def build_banner_prompt(
+    task_type: str,
+    region: str,
+    post_text: str,
+    account_name: str,
+    salary_text: str,
+    role_phrase: str,
+    prompt_template: str = "",
+    prompt_template_name: str = "",
+) -> str:
     region_text = clean_display_text(region)
+    template_values = {
+        "account_name": account_name,
+        "task_type": task_type,
+        "region": region_text or "未設定",
+        "salary_text": salary_text,
+        "role_phrase": role_phrase,
+        "post_text": post_text.strip(),
+    }
+    if prompt_template:
+        rendered = render_prompt_template(prompt_template, template_values)
+        source = f"テンプレート: {prompt_template_name}\n\n" if prompt_template_name else ""
+        return f"{source}{rendered.strip()}\n\n元の投稿文:\n{post_text.strip()}"
+
     common = [
         "あなたは求人広告バナーを作るデザイナーです。",
         "正方形1:1の求人広告バナーを作成してください。",
@@ -576,20 +888,34 @@ def sheet_post_text(task_kind: str, post_text: str) -> str:
     return body or post_text
 
 
-def build_post_text(task_type: str, region: str, source_text: str, account_name: str) -> tuple[str, str]:
+def choose_post_variation(account_no: str, row_idx: int, task_type: str) -> tuple[str, str]:
+    rng = random.Random(f"{account_no}:{row_idx}:{task_type}:post-variation")
+    return POST_VARIATION_THEMES[rng.randrange(len(POST_VARIATION_THEMES))]
+
+
+def build_post_text(
+    task_type: str,
+    region: str,
+    source_text: str,
+    account_name: str,
+    variation: tuple[str, str] | None = None,
+) -> tuple[str, str]:
     salary_text = extract_salary_text(source_text, task_type)
     role_phrase = extract_role_phrase(source_text, task_type)
     region_text = clean_display_text(region)
+    variation_name, variation_direction = variation or ("標準", "案件情報に沿って自然に書く。")
 
     if task_type == "factory":
-        title = f"【工場】未経験OK／{role_phrase}｜{salary_text}"
+        title = f"【工場】{variation_name}向け／{role_phrase}｜{salary_text}"
         body = [
-            "「地方でも、しっかり稼ぎたい」",
-            "そんな方に向けた製造求人です。",
+            f"{region_text or '投稿地域'}で仕事を探している方向けの製造求人です。",
+            f"今回は「{variation_name}」を重視する方に伝わりやすい内容でご案内します。",
             "",
             f"{role_phrase}の募集で、{salary_text}を目安にしっかり収入を狙えます。",
             "作業は機械への材料セットやボタン操作が中心。",
             "特別なスキルは不要で、未経験から始めやすい内容です。",
+            "",
+            variation_direction,
         ]
         if "寮" in source_text or "住" in source_text:
             body.extend(
@@ -638,19 +964,22 @@ def build_post_text(task_type: str, region: str, source_text: str, account_name:
             [
                 "",
                 "## 応募導線",
-                "「高収入の製造求人について聞きたい」という方は、公式LINEにてご連絡ください。",
+                "「この製造求人について条件を確認したい」という方は、公式LINEにてご連絡ください。",
                 "詳しい条件や見学日程をご案内します。",
                 "",
                 "【公式LINEURL】",
             ]
         )
     else:
-        title = f"【在宅】未経験OK／{role_phrase}｜{salary_text}"
+        title = f"【在宅】{variation_name}向け／{role_phrase}｜{salary_text}"
         body = [
-            "在宅で安定して働きたい方に向けた募集です。",
+            f"{region_text or '投稿地域'}からでも応募しやすい、完全在宅の募集です。",
+            f"今回は「{variation_name}」を重視する方に向けて、働き方が伝わるようにまとめています。",
             f"今回の業務は、{role_phrase}を中心としたデスクワークやオンライン業務が中心。",
             f"{salary_text}を目安に、出勤不要で仕事を進めたい方に相性のよい内容です。",
             "業務はテンプレートや手順書に沿って進めるため、未経験からでも流れを掴みやすい構成です。",
+            "",
+            variation_direction,
         ]
         details = [
             "## 具体的な業務",
@@ -818,7 +1147,38 @@ def validate_manifest_task(task: dict) -> None:
         raise RuntimeError(f"manifest の画像ファイル名が不正です: {task['account_name']} / {task['kind']} -> {actual} (expected {expected})")
 
 
-def build_tasks(rows: list[list[str]]) -> list[Task]:
+def validate_post_text(task: dict, post_text: str) -> None:
+    if "【公式LINEURL】" not in post_text:
+        raise RuntimeError(f"投稿文に公式LINEプレースホルダーがありません: {task['account_name']} / {task['label_ja']}")
+    if re.search(r"https?://|lin\.ee|line\.me", post_text, flags=re.IGNORECASE):
+        raise RuntimeError(f"投稿文に実URLらしき文字列があります: {task['account_name']} / {task['label_ja']}")
+    if task["kind"] == "factory" and "完全在宅" in post_text:
+        raise RuntimeError(f"工場投稿文に在宅系の文言があります: {task['account_name']} / {task['label_ja']}")
+    if task["kind"] in {"remote1", "remote2"} and "完全在宅" not in post_text:
+        raise RuntimeError(f"在宅投稿文に完全在宅の表記がありません: {task['account_name']} / {task['label_ja']}")
+
+
+def validate_task_files(output_root: Path, tasks: list[dict]) -> dict:
+    checked = 0
+    missing_images = []
+    for task in tasks:
+        validate_manifest_task(task)
+        account_dir = output_root / task["folder_name"]
+        image_path = account_dir / Path(task["image_relpath"]).name
+        post_path = account_dir / Path(task["post_relpath"]).name
+        if not post_path.exists():
+            raise FileNotFoundError(f"投稿文章が見つかりません: {post_path}")
+        post_text = post_path.read_text(encoding="utf-8")
+        validate_post_text(task, post_text)
+        if image_path.exists():
+            validate_image_kind(image_path, task["kind"], task["account_name"])
+        else:
+            missing_images.append(str(image_path))
+        checked += 1
+    return {"checked": checked, "missing_images": missing_images}
+
+
+def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROMPT_TEMPLATES_DIR) -> list[Task]:
     tasks: list[Task] = []
     for idx, row in enumerate(rows, start=7):
         account_no = str(row[0]).strip() if len(row) > 0 else ""
@@ -835,7 +1195,13 @@ def build_tasks(rows: list[list[str]]) -> list[Task]:
         folder_name = f"{account_name}"
         if factory_source_post:
             factory_case_source = choose_factory_case(account_no, idx, factory_source_post)
-            factory_post, factory_salary = build_post_text("factory", factory_region, factory_case_source, account_name)
+            factory_variation = choose_post_variation(account_no, idx, "factory")
+            factory_post, factory_salary = build_post_text(
+                "factory", factory_region, factory_case_source, account_name, factory_variation
+            )
+            factory_template_name, factory_template = choose_prompt_template(
+                prompt_templates_dir, "factory", account_no, idx, "工場"
+            )
             tasks.append(
                 Task(
                     account_no=account_no,
@@ -852,11 +1218,28 @@ def build_tasks(rows: list[list[str]]) -> list[Task]:
                     image_filename="工場.jpg",
                     post_filename=post_filename_for_label("工場"),
                     prompt_filename="工場_画像プロンプト.md",
-                    prompt_text=build_banner_prompt("factory", factory_region, factory_post, account_name, factory_salary, extract_role_phrase(factory_case_source, "factory")),
+                    prompt_text=build_banner_prompt(
+                        "factory",
+                        factory_region,
+                        factory_post,
+                        account_name,
+                        factory_salary,
+                        extract_role_phrase(factory_case_source, "factory"),
+                        factory_template,
+                        factory_template_name,
+                    ),
+                    prompt_template_name=factory_template_name,
+                    prompt_template=factory_template,
                 )
             )
         if remote1_source_post:
-            remote1_post, remote1_salary = build_post_text("remote1", remote_region, remote1_source_post, account_name)
+            remote1_variation = choose_post_variation(account_no, idx, "remote1")
+            remote1_post, remote1_salary = build_post_text(
+                "remote1", remote_region, remote1_source_post, account_name, remote1_variation
+            )
+            remote1_template_name, remote1_template = choose_prompt_template(
+                prompt_templates_dir, "remote1", account_no, idx, "在宅1"
+            )
             tasks.append(
                 Task(
                     account_no=account_no,
@@ -873,11 +1256,28 @@ def build_tasks(rows: list[list[str]]) -> list[Task]:
                     image_filename="在宅1.jpg",
                     post_filename=post_filename_for_label("在宅1"),
                     prompt_filename="在宅1_画像プロンプト.md",
-                    prompt_text=build_banner_prompt("remote1", remote_region, remote1_post, account_name, remote1_salary, extract_role_phrase(remote1_source_post, "remote1")),
+                    prompt_text=build_banner_prompt(
+                        "remote1",
+                        remote_region,
+                        remote1_post,
+                        account_name,
+                        remote1_salary,
+                        extract_role_phrase(remote1_source_post, "remote1"),
+                        remote1_template,
+                        remote1_template_name,
+                    ),
+                    prompt_template_name=remote1_template_name,
+                    prompt_template=remote1_template,
                 )
             )
         if remote2_source_post:
-            remote2_post, remote2_salary = build_post_text("remote2", remote_region, remote2_source_post, account_name)
+            remote2_variation = choose_post_variation(account_no, idx, "remote2")
+            remote2_post, remote2_salary = build_post_text(
+                "remote2", remote_region, remote2_source_post, account_name, remote2_variation
+            )
+            remote2_template_name, remote2_template = choose_prompt_template(
+                prompt_templates_dir, "remote2", account_no, idx, "在宅2"
+            )
             tasks.append(
                 Task(
                     account_no=account_no,
@@ -894,7 +1294,18 @@ def build_tasks(rows: list[list[str]]) -> list[Task]:
                     image_filename="在宅2.jpg",
                     post_filename=post_filename_for_label("在宅2"),
                     prompt_filename="在宅2_画像プロンプト.md",
-                    prompt_text=build_banner_prompt("remote2", remote_region, remote2_post, account_name, remote2_salary, extract_role_phrase(remote2_source_post, "remote2")),
+                    prompt_text=build_banner_prompt(
+                        "remote2",
+                        remote_region,
+                        remote2_post,
+                        account_name,
+                        remote2_salary,
+                        extract_role_phrase(remote2_source_post, "remote2"),
+                        remote2_template,
+                        remote2_template_name,
+                    ),
+                    prompt_template_name=remote2_template_name,
+                    prompt_template=remote2_template,
                 )
             )
     return tasks
@@ -934,6 +1345,8 @@ def write_prepare_output(output_root: Path, tasks: list[Task]) -> None:
                 task.prompt_text = build_banner_prompt(
                     task.kind, task.region, existing_text, task.account_name,
                     task.salary_text, extract_role_phrase(existing_text, task.kind),
+                    task.prompt_template,
+                    task.prompt_template_name,
                 )
             else:
                 post_path.write_text(task.post_text, encoding="utf-8")
@@ -971,6 +1384,7 @@ def write_prepare_output(output_root: Path, tasks: list[Task]) -> None:
                     "post_text": task.post_text,
                     "salary_text": task.salary_text,
                     "prompt_text": task.prompt_text,
+                    "prompt_template_name": task.prompt_template_name,
                     "folder_name": task.folder_name,
                     "image_relpath": f"{task.folder_name}/{task.image_filename}",
                     "post_relpath": f"{task.folder_name}/{task.post_filename}",
@@ -1003,21 +1417,62 @@ def write_prepare_output(output_root: Path, tasks: list[Task]) -> None:
     (output_root / "tasks.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def prepare(output_root: Path) -> None:
+def prepare(output_root: Path, prompt_templates_dir: Path) -> None:
     rows = read_sheet_rows()
-    tasks = build_tasks(rows)
+    tasks = build_tasks(rows, prompt_templates_dir=prompt_templates_dir)
     write_prepare_output(output_root, tasks)
-    print(json.dumps({"output_root": str(output_root), "task_count": len(tasks)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "output_root": str(output_root),
+                "prompt_templates_dir": str(prompt_templates_dir),
+                "task_count": len(tasks),
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
-def sync_drive(output_root: Path, purge_existing: bool) -> None:
+def read_tasks(output_root: Path) -> list[dict]:
     tasks_path = output_root / "tasks.json"
     if not tasks_path.exists():
         raise FileNotFoundError(f"tasks.json が見つかりません: {tasks_path}")
-
     tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+    if not isinstance(tasks, list):
+        raise RuntimeError(f"tasks.json の形式が不正です: {tasks_path}")
+    return tasks
+
+
+def write_image_only_tree(output_root: Path, tasks: list[dict]) -> Path:
+    image_root = output_root / IMAGE_ONLY_DIRNAME
+    if image_root.exists():
+        shutil.rmtree(image_root)
+    image_root.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    for task in tasks:
+        account_dir = output_root / task["folder_name"]
+        image_path = account_dir / Path(task["image_relpath"]).name
+        if not image_path.exists():
+            continue
+        target_dir = image_root / task["folder_name"]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(image_path, target_dir / image_path.name)
+        copied += 1
+
+    (image_root / "manifest.json").write_text(
+        json.dumps({"image_count": copied, "source_root": str(output_root)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return image_root
+
+
+def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bool) -> None:
+    tasks = read_tasks(output_root)
     for task in tasks:
         validate_manifest_task(task)
+    validation = validate_task_files(output_root, tasks)
+    image_only_root = write_image_only_tree(output_root, tasks)
     folder_ids: dict[str, str] = {
         folder["name"]: folder["id"]
         for folder in list_drive_child_folders(PARENT_FOLDER_ID)
@@ -1028,14 +1483,19 @@ def sync_drive(output_root: Path, purge_existing: bool) -> None:
         folder_ids.clear()
 
     uploaded_account_docs: set[str] = set()
+    purged_account_images: set[str] = set()
     updates: list[dict] = []
     uploaded = 0
+    deleted_images = 0
 
     for task in tasks:
         account_name = task["account_name"]
         if account_name not in folder_ids:
             folder_ids[account_name] = create_drive_folder(account_name, PARENT_FOLDER_ID)
         folder_id = folder_ids[account_name]
+        if purge_account_images and account_name not in purged_account_images:
+            deleted_images += delete_drive_image_files(folder_id)
+            purged_account_images.add(account_name)
 
         account_dir = output_root / task["folder_name"]
         image_path = account_dir / Path(task["image_relpath"]).name
@@ -1046,6 +1506,7 @@ def sync_drive(output_root: Path, purge_existing: bool) -> None:
         image_exists = image_path.exists()
         if not post_path.exists():
             raise FileNotFoundError(f"投稿文章が見つかりません: {post_path}")
+        validate_post_text(task, post_path.read_text(encoding="utf-8"))
         if image_exists and image_path.name != expected_image_filename(task["kind"]):
             raise RuntimeError(
                 f"画像ファイル名が期待値と一致しません: {account_name} / {task['kind']} -> {image_path.name}"
@@ -1105,10 +1566,40 @@ def sync_drive(output_root: Path, purge_existing: bool) -> None:
 
     print(json.dumps({"output_root": str(output_root), "uploaded": uploaded, "updated_cells": len(updates)}, ensure_ascii=False))
 
+    print(
+        json.dumps(
+            {
+                "validated_tasks": validation["checked"],
+                "missing_images": validation["missing_images"],
+                "image_only_root": str(image_only_root),
+                "deleted_drive_images": deleted_images,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def validate_output(output_root: Path) -> None:
+    tasks = read_tasks(output_root)
+    validation = validate_task_files(output_root, tasks)
+    image_only_root = write_image_only_tree(output_root, tasks)
+    print(
+        json.dumps(
+            {
+                "output_root": str(output_root),
+                "checked": validation["checked"],
+                "missing_images": validation["missing_images"],
+                "image_only_root": str(image_only_root),
+            },
+            ensure_ascii=False,
+        )
+    )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="JMTY weekly prompt/image bundle helper")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
+    parser.add_argument("--prompt-templates-dir", default=str(DEFAULT_PROMPT_TEMPLATES_DIR))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("prepare")
@@ -1118,19 +1609,62 @@ def main() -> int:
 
     sync_parser = subparsers.add_parser("sync-drive")
     sync_parser.add_argument("--purge-existing", action="store_true")
+    sync_parser.add_argument(
+        "--purge-account-images",
+        action="store_true",
+        help="アカウントフォルダは残し、既存画像ファイルだけ削除してからアップロードする",
+    )
+
+    subparsers.add_parser("validate-output")
+
+    notify_parser = subparsers.add_parser("notify-improvement")
+    notify_parser.add_argument("--title", required=True)
+    notify_parser.add_argument("--summary", required=True)
+    notify_parser.add_argument("--changed-file", action="append", default=[])
+    notify_parser.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args()
     output_root = Path(args.output_root).expanduser()
 
-    if args.command == "prepare":
-        prepare(output_root)
-    elif args.command == "rotate-sheet":
-        rotate_sheet(output_root, dry_run=args.dry_run)
-    elif args.command == "sync-drive":
-        sync_drive(output_root, purge_existing=args.purge_existing)
+    try:
+        if args.command == "prepare":
+            prepare(output_root, Path(args.prompt_templates_dir).expanduser())
+        elif args.command == "rotate-sheet":
+            rotate_sheet(output_root, dry_run=args.dry_run)
+        elif args.command == "sync-drive":
+            sync_drive(output_root, purge_existing=args.purge_existing, purge_account_images=args.purge_account_images)
+        elif args.command == "validate-output":
+            validate_output(output_root)
+        elif args.command == "notify-improvement":
+            lines = [
+                "【ジモティ週次処理 改善メモ】",
+                f"- 件名: {args.title}",
+                f"- 内容: {args.summary}",
+            ]
+            if args.changed_file:
+                lines.append("- 変更ファイル:")
+                lines.extend(f"  - `{path}`" for path in args.changed_file)
+            content = "\n".join(lines)
+            if args.dry_run:
+                print(content)
+            else:
+                post_discord_jmty_message(content)
+    except JmtyWeeklyAssetsError as exc:
+        record_and_notify_failure(args.command, output_root, exc)
+        raise
+    except Exception as exc:
+        report_path = record_and_notify_failure(args.command, output_root, exc)
+        report_text = f" 改善レポート: {report_path}" if report_path else ""
+        raise JmtyWeeklyAssetsError(
+            f"予期しないエラーが発生しました。{report_text}\n{type(exc).__name__}: {exc}"
+        ) from exc
 
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except JmtyWeeklyAssetsError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
