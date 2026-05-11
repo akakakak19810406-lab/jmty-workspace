@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Git push の直前に JMTY 用の容量チェックを走らせます。
+# Git LFS の無料枠を超えそうな push を止めるためのフックです。
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+python "$repo_root/.agent/skills/common/scripts/jmty_runtime.py" git-lfs-pre-push-guard --remote-name "${1:-origin}"
