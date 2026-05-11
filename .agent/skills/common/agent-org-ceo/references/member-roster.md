@@ -1,42 +1,28 @@
 # Member Roster
 
-> **正本は `../agents/` 配下の各 README.md。** このファイルは人向けのクイックリファレンスです。
-> スキルの実パスは各 README を参照してください。
-
-## CEO — ジョブズ
-- 役割: オーナー依頼の再定義、優先順位づけ、担当アサイン、最終統合
+## CEO
+- 役割: 依頼の再定義、優先順位づけ、担当割り当て、最終統合
 - 主な読み物: `skill-finder`、`operating-model.md`、`member-roster.md`
-- 読まないもの: 着手前に全スキル本文を横断して読むこと
 
-## Ops Manager — ガレス
-- 役割: Git、セットアップ、repo 整理、共有資産、引き継ぎ
-- 主担当スキル: `git-workflow` / `team-info-setup` / `shared-agent-assets` / `repo-information-architecture` / `context-handoff`
+## Ops Manager
+- 役割: Git、セットアップ、repo 整理、秘密情報、コマンド同期
+- 主担当スキル: `git-workflow` / `jmty-setup` / `agent-org-ceo` / `skill-finder`
 
-## Web Manager — ソフィア
-- 役割: Web 制作、UI、複製、イラスト差し替え
-- 主担当スキル: `frontend-design` / `gsap-awwwards-website` / `clone-website` / `themeisle-illustration-fetcher` / `tyoudoii-illust-fetcher`
+## Writing Manager
+- 役割: ジモティ投稿文の作成、見出し、本文、テンプレ差分の確認
+- 主担当スキル: `jmty-posts`
 
-## Media Manager — ルカーノ
-- 役割: Remotion、動画、字幕、音声、Canva スライド
-- 主担当スキル: `video-production` / `lyric-emotion-mapper` / `voice-script-launcher` / `canva-slideshow-video` / `canva-slide-design-extender` / `viral-template-generator`
-- メモ: 台本は Writing Manager が完成させてから引き受ける
+## Automation Manager
+- 役割: Google Drive 同期、定型処理、週次素材処理
+- 主担当スキル: `jmty-posts` / `gdrive-copy`
 
-## Research Manager — ウォーレン
-- 役割: 市場調査、競合調査、情報収集、要約
-- 主担当スキル: `agent-reach` / `insta-company-research-brief` / `monthly-kpi-planner`
-- メモ: 個人用 KPI 系は `personal/deguchishouma` を正本とする
+## Media Manager
+- 役割: JMTY 週次素材・画像整理に関係するメディア処理
+- 主担当スキル: `jmty-posts`
 
-## Writing Manager — イーロン
-- 役割: 台本、X 投稿、記事、投稿文
-- 主担当スキル: `script-writing-accounts-aware` / `x-post-writer` / `note-article-ayumi` / `jmty-posts` / `insta-company-post-idea-generator`
-- メモ: 動画制作では台本を完成させてから Media Manager に渡す
+## Research Manager
+- 役割: JMTY 投稿に必要な求人素材・掲載条件・表現確認
+- 主担当: `inputs/jmty_factory_cases/` / `inputs/jmty_remote_samples/`
 
-## Automation Manager — ゼノン
-- 役割: Google Workspace、自動化、定型処理、テンプレ運用
-- 主担当スキル: `daily-calendar-summary` / `gws-sheets-duplicate-checker` / `youtube-auto-upload` / `gws-calendar-booking-reply` / `gws-sheets-html-dashboard`
-- メモ: 個人用スキルは `personal/deguchishouma` を正本とする
-
-## 役割追加ルール
-- 既存メンバーの責務が広すぎるときだけ追加する
-- 新メンバーを増やす前に、既存メンバーへ寄せられないか確認する
-- 新メンバーを追加したら、`../agents/` と `skill-finder` の該当箇所を同時に更新する
+## Web Manager
+- 役割: この repo では原則休止。JMTY に必要な簡易 HTML レポートなどだけ扱う。

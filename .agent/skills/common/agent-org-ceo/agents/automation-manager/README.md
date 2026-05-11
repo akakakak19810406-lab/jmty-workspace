@@ -1,12 +1,8 @@
-# Automation Manager — ゼノン
+# Automation Manager
 
-- 役割: Google Workspace、自動化、定型処理、テンプレ運用
+- 役割: JMTY の Google Drive 同期、定型処理、週次素材処理
 - 主担当スキル:
-  - `$TEAM_INFO_ROOT/.agent/skills/common/daily-calendar-summary/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/gws-sheets-duplicate-checker/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/youtube-auto-upload/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/personal/deguchishouma/gws-calendar-booking-reply/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/personal/deguchishouma/gws-sheets-html-dashboard/SKILL.md`
+  - `$JMTY_ROOT/.agent/skills/jmty/jmty-posts/SKILL.md`
+  - `$JMTY_ROOT/.agent/skills/common/git-workflow/gdrive-copy/SKILL.md`
 - メモ:
-  - 個人用スキルは `personal/deguchishouma` を正本とする
-  - 参照だけで足りるタスクでは、ここに書かれた候補から必要最小限だけ開く
+  - 投稿出力同期と週次素材処理は `jmty-posts` 内の作業タイプとして扱う

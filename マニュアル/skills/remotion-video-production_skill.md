@@ -1,1 +1,0 @@
-../../.agent/skills/remotion/remotion-video-production/SKILL.md

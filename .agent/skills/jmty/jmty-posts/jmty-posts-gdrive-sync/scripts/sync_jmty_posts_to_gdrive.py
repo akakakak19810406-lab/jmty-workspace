@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-COMMON_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "common" / "scripts"
+COMMON_SCRIPTS_DIR = Path(__file__).resolve().parents[4] / "common" / "scripts"
 if str(COMMON_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(COMMON_SCRIPTS_DIR))
 
@@ -82,7 +82,7 @@ def main() -> int:
     if destination_root is None:
         print(
             "[ERROR] destination root could not be detected. "
-            "Pass a destination path or set TEAM_INFO_SHARED_ROOT / JMTY_GDRIVE_DEST_ROOT.",
+            "Pass a destination path or set JMTY_SHARED_ROOT / JMTY_GDRIVE_DEST_ROOT.",
             file=sys.stderr,
         )
         return 1

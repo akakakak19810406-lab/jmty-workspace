@@ -1,1 +1,0 @@
-../../.agent/skills/common/team-info-setup/SKILL.md

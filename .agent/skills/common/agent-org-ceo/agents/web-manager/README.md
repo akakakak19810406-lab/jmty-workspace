@@ -1,9 +1,6 @@
-# Web Manager — ソフィア
+# Web Manager
 
-- 役割: Web 制作、UI、複製、イラスト差し替え
-- 主担当スキル:
-  - `$TEAM_INFO_ROOT/.agent/skills/web-design/frontend-design/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/web-design/frontend-design/gsap-awwwards-website/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/web-design/frontend-design/clone-website/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/web-design/frontend-design/themeisle-illustration-fetcher/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/web-design/frontend-design/tyoudoii-illust-fetcher/SKILL.md`
+- 役割: この JMTY repo では原則休止
+- 対応方針:
+  - JMTY 投稿・素材管理に関係しない Web 制作依頼は、この repo 外の適切な作業場所へ分ける
+  - JMTY 用の簡易 HTML レポートなど repo 内に必要なものだけ Ops Manager と相談して扱う

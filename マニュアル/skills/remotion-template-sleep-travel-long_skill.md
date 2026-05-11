@@ -1,1 +1,0 @@
-../../.agent/skills/remotion/remotion-template-sleep-travel-long-knowledge-relax/SKILL.md

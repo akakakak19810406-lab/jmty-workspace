@@ -1,5 +1,5 @@
 ---
-description: "ジモティー投稿文スキルを起動する"
+description: "ジモティー統合スキルを起動する"
 argument-hint: "[EXTRA=\"free-form note\"]"
 ---
 

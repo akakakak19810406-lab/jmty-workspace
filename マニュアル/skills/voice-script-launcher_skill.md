@@ -1,1 +1,0 @@
-../../.agent/skills/remotion/voice-script-launcher/SKILL.md

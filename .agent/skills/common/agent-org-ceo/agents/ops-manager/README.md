@@ -1,9 +1,8 @@
-# Ops Manager — ガレス
+# Ops Manager
 
-- 役割: Git、セットアップ、repo 整理、共有資産、引き継ぎ
+- 役割: Git、セットアップ、repo 整理、秘密情報、コマンド同期
 - 主担当スキル:
-  - `$TEAM_INFO_ROOT/.agent/skills/common/git-workflow/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/team-info-setup/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/team-info-setup/shared-agent-assets/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/repo-information-architecture/SKILL.md`
-  - `$TEAM_INFO_ROOT/.agent/skills/common/context-handoff/SKILL.md`
+  - `$JMTY_ROOT/.agent/skills/common/git-workflow/SKILL.md`
+  - `$JMTY_ROOT/.agent/skills/common/jmty-setup/SKILL.md`
+  - `$JMTY_ROOT/.agent/skills/common/agent-org-ceo/SKILL.md`
+  - `$JMTY_ROOT/.agent/skills/skill-finder/SKILL.md`

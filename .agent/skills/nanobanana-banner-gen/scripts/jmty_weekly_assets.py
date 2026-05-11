@@ -17,7 +17,7 @@ SPREADSHEET_ID = "1GKBTHwBS6W0D30X_yK7vqsaDRWw3p1tXM7lnFhyb0Uw"
 SHEET_NAME = "アカウント情報"
 PARENT_FOLDER_ID = "16P5sOzyJHLemwURON6Wf1i7NjodK3WWF"
 DEFAULT_OUTPUT_ROOT = Path("outputs/jmty-weekly/current")
-FACTORY_CASES_PATH = Path("/Users/deguchishouma/team-info/inputs/jmty_factory_cases/2026-02_案件一覧.md")
+FACTORY_CASES_PATH = Path("/Users/deguchishouma/jmty/inputs/jmty_factory_cases/2026-02_案件一覧.md")
 
 FACTORY_REGION_INDEX = 7   # H
 FACTORY_IMAGE_COL = "I"
