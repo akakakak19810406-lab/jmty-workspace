@@ -29,11 +29,14 @@ DEFAULT_INTERVAL_SECONDS = 60
 DEFAULT_OUTPUT_ROOT = ROOT / "outputs/jmty-weekly/current"
 APPROVALS_PATH = ROOT / "outputs/jmty-gui/approvals.json"
 IMAGE_VALIDATION_PATH = ROOT / "outputs/jmty-gui/image_validation.json"
+SHEET_CACHE_PATH = ROOT / "outputs/jmty-gui/sheet_cache.json"
 FACTORY_CASES_DIR = ROOT / "inputs/jmty_factory_cases"
 REMOTE_SAMPLES_DIR = ROOT / "inputs/jmty_remote_samples"
 POST_STYLE_SAMPLES_DIR = ROOT / "inputs/jmty_post_style_samples"
 IMAGE_PROMPT_TEMPLATES_DIR = ROOT / "inputs/jmty_image_prompt_templates"
 LOCAL_GUI_BASE_URL = os.environ.get("JMTY_LOCAL_GUI_BASE_URL", "http://127.0.0.1:8787")
+LOCAL_GUI_JOB_TIMEOUT_SECONDS = int(os.environ.get("JMTY_LOCAL_GUI_JOB_TIMEOUT_SECONDS", "1800"))
+LOCAL_GUI_JOB_POLL_SECONDS = int(os.environ.get("JMTY_LOCAL_GUI_JOB_POLL_SECONDS", "5"))
 SLOT_DEFS = [
     ("factory", "工場", "工場の投稿文章.md", "工場_画像プロンプト.md", ["工場.jpg", "工場.png", "工場.jpeg"]),
     ("remote1", "在宅1", "在宅1の投稿文章.md", "在宅1_画像プロンプト.md", ["在宅1.jpg", "在宅1.png", "在宅1.jpeg"]),
@@ -107,6 +110,65 @@ def rel_to_root(path: Path) -> str:
         return str(path.resolve().relative_to(ROOT))
     except ValueError:
         return str(path)
+
+
+def split_remote_regions(value: Any) -> tuple[str, str]:
+    parts = [line.strip() for line in str(value or "").replace("\r", "\n").split("\n") if line.strip()]
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], parts[0]
+    return parts[0], parts[1]
+
+
+def region_for_slot(kind: str, value: Any) -> str:
+    if kind == "remote1":
+        return split_remote_regions(value)[0]
+    if kind == "remote2":
+        return split_remote_regions(value)[1]
+    return str(value or "").strip()
+
+
+def normalize_account_name(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def build_task_index(output_root: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    raw_tasks = read_json(output_root / "tasks.json", [])
+    tasks = raw_tasks if isinstance(raw_tasks, list) else []
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        kind = str(task.get("kind") or "")
+        for name_key in ("folder_name", "account_name"):
+            account_name = normalize_account_name(task.get(name_key))
+            if account_name and kind:
+                index[(account_name, kind)] = task
+    return index
+
+
+def sheet_value(values: dict[str, Any], key: str) -> str:
+    item = values.get(key, {}) if isinstance(values, dict) else {}
+    return str(item.get("value") or "").strip() if isinstance(item, dict) else ""
+
+
+def build_sheet_region_index() -> dict[tuple[str, str], str]:
+    cache = read_json(SHEET_CACHE_PATH, {})
+    accounts = cache.get("accounts", []) if isinstance(cache, dict) else []
+    index: dict[tuple[str, str], str] = {}
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        account_name = normalize_account_name(account.get("account_name"))
+        values = account.get("values") if isinstance(account.get("values"), dict) else {}
+        if not account_name:
+            continue
+        remote1_region, remote2_region = split_remote_regions(sheet_value(values, "remote_region"))
+        index[(account_name, "factory")] = sheet_value(values, "factory_region")
+        index[(account_name, "remote1")] = sheet_value(values, "remote1_region") or remote1_region
+        index[(account_name, "remote2")] = sheet_value(values, "remote2_region") or remote2_region
+    return index
 
 
 def list_text_files(base: Path) -> list[dict[str, Any]]:
@@ -196,6 +258,7 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
     validation = read_json(IMAGE_VALIDATION_PATH, {})
     post_rules = first_existing_json(
         [
+            ROOT / "inputs/jmty_post_generation_rules.json",
             ROOT / "outputs/jmty-gui/post_rules.json",
             ROOT / "inputs/jmty_post_rules.json",
             ROOT / "inputs/jmty_post_rules/rules.json",
@@ -208,6 +271,8 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
             ROOT / "inputs/jmty_image_prompt_rules.json",
         ]
     )
+    task_index = build_task_index(output_root)
+    sheet_region_index = build_sheet_region_index()
     accounts: list[dict[str, Any]] = []
 
     if not output_root.exists():
@@ -235,6 +300,10 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
             post_text = read_text(account_dir / post_name)
             prompt_text = read_text(account_dir / prompt_name)
             image_path = next((account_dir / name for name in image_names if (account_dir / name).exists()), None)
+            normalized_account_name = normalize_account_name(account_dir.name)
+            task = task_index.get((normalized_account_name, kind), {})
+            task_region = region_for_slot(kind, task.get("region", "") if isinstance(task, dict) else "")
+            region = sheet_region_index.get((normalized_account_name, kind)) or task_region
             key = approval_key(account_dir.name, kind)
             validation_item = validation.get(key, {}) if isinstance(validation, dict) else {}
             validation_status = str(validation_item.get("status") or "") if isinstance(validation_item, dict) else ""
@@ -244,9 +313,9 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
                     "kind": kind,
                     "label": label,
                     "accountName": account_dir.name,
-                    "rowNumber": "",
-                    "region": "",
-                    "salary": "",
+                    "rowNumber": task.get("row_idx", "") if isinstance(task, dict) else "",
+                    "region": region,
+                    "salary": task.get("salary_text", "") if isinstance(task, dict) else "",
                     "postText": post_text,
                     "localPostText": post_text,
                     "sheetPostText": "",
@@ -364,18 +433,22 @@ def local_gui_path_for_job(job_type: str) -> tuple[str, dict[str, Any]]:
         return "/api/image-validate", {}
     if job_type == "sync_drive":
         return "/api/job", {"command": "sync-drive"}
+    if job_type == "sync_sheet":
+        return "/api/job", {"command": "sync-sheet"}
     if job_type == "rotate_sheet":
         return "/api/job", {"command": "rotate-sheet"}
     if job_type == "prepare_posts":
-        return "/api/job", {"command": "prepare"}
+        return "/api/post-generate", {"scope": "all"}
     if job_type == "save_post":
         return "/api/post", {}
     if job_type == "sync_post_to_sheet":
         return "/api/post/sheet-sync", {}
     if job_type == "sync_all_dirty_posts_to_sheet":
         return "/api/post/sheet-sync-all", {}
-    if job_type in {"rewrite_post_with_style", "rewrite_all_posts_with_style"}:
-        return "/api/post-rewrite", {"all": job_type == "rewrite_all_posts_with_style"}
+    if job_type == "rewrite_post_with_style":
+        return "/api/post-generate", {}
+    if job_type == "rewrite_all_posts_with_style":
+        return "/api/post-generate", {"scope": "all"}
     if job_type == "save_image_prompt":
         return "/api/prompt", {}
     if job_type == "cancel_image":
@@ -420,12 +493,63 @@ def request_local_gui(path: str, payload: dict[str, Any]) -> dict[str, Any]:
         ) from error
 
 
+def request_local_gui_get(path: str) -> dict[str, Any]:
+    url = f"{LOCAL_GUI_BASE_URL.rstrip('/')}{path}"
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as error:
+        raw = error.read().decode("utf-8", errors="replace")
+        raise ApiError(f"local GUI {path} failed: {error.code} {raw}") from error
+    except urllib.error.URLError as error:
+        raise ApiError(
+            f"local GUI {path} failed: {error.reason}. Start local GUI with `jmty` or set JMTY_LOCAL_GUI_BASE_URL."
+        ) from error
+
+
+def wait_for_local_gui_job(response: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    job = response.get("job") if isinstance(response.get("job"), dict) else {}
+    job_id = str(job.get("id") or "")
+    if not job_id or str(job.get("status") or "") != "running":
+        return response, []
+
+    deadline = time.monotonic() + LOCAL_GUI_JOB_TIMEOUT_SECONDS
+    logs = [f"Waiting for local GUI job {job_id} at {now_iso()}"]
+    last_job = job
+    last_state: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        time.sleep(max(1, LOCAL_GUI_JOB_POLL_SECONDS))
+        state_response = request_local_gui_get("/api/state")
+        state = state_response.get("state") if isinstance(state_response.get("state"), dict) else {}
+        last_state = state
+        local_jobs = state.get("jobs") if isinstance(state.get("jobs"), list) else []
+        matching = next((item for item in local_jobs if isinstance(item, dict) and str(item.get("id")) == job_id), None)
+        if not matching:
+            continue
+        last_job = matching
+        if str(matching.get("status") or "") != "running":
+            logs.append(f"Local GUI job {job_id} finished with {matching.get('status')} at {now_iso()}")
+            break
+    else:
+        raise TimeoutError(f"local GUI job {job_id} did not finish within {LOCAL_GUI_JOB_TIMEOUT_SECONDS} seconds")
+
+    final_response = {**response, "job": last_job, "state": last_state}
+    if str(last_job.get("status") or "") == "failed":
+        raise ApiError(str(last_job.get("stderr") or last_job.get("stdout") or f"local GUI job {job_id} failed"))
+    return final_response, logs
+
+
 def handle_local_gui_bridge_job(job: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     job_type = str(job.get("type"))
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
     path, defaults = local_gui_path_for_job(job_type)
     bridged_payload = {**defaults, **payload}
     response = request_local_gui(path, bridged_payload)
+    wait_logs: list[str] = []
+    if path == "/api/job":
+        response, wait_logs = wait_for_local_gui_job(response)
     snapshot = build_jmty_snapshot()
     result = {
         "message": f"{job_type} completed through local JMTY GUI bridge",
@@ -435,7 +559,7 @@ def handle_local_gui_bridge_job(job: dict[str, Any]) -> tuple[dict[str, Any], li
         "snapshot": snapshot,
         "processedAt": now_iso(),
     }
-    return result, [f"Forwarded {job_type} to {LOCAL_GUI_BASE_URL}{path} at {now_iso()}"]
+    return result, [f"Forwarded {job_type} to {LOCAL_GUI_BASE_URL}{path} at {now_iso()}", *wait_logs]
 
 
 def handle_sync_state_job() -> tuple[dict[str, Any], list[str]]:
@@ -466,6 +590,7 @@ def process_job(config: WorkerConfig, job: dict[str, Any]) -> None:
             "generate_image",
             "validate_image",
             "sync_drive",
+            "sync_sheet",
             "rotate_sheet",
             "prepare_posts",
             "save_post",

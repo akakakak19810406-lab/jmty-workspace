@@ -5,6 +5,30 @@
 
 ## 起動
 
+新しいパソコンで最初に使う場合は、リポジトリ直下で次を実行します。
+Python や Homebrew がない macOS でも、まず `install.sh` が Python を用意してからセットアップ本体を実行します。
+
+```bash
+bash install.sh
+```
+
+セットアップ後、新しいターミナルで次を実行するとGUIが起動します。
+
+```bash
+jmty
+```
+
+Python 3 がすでにある場合は、セットアップ本体だけを直接実行できます。
+
+```bash
+python3 scripts/setup_jmty.py
+```
+
+Google Sheets / Drive を使うには、セットアップ中に開く Google ログインを完了してください。
+あとで認証する場合は、GUI右上の `gws再認証` を押します。
+
+直接起動する場合:
+
 ```bash
 python3 scripts/jmty_gui.py --open
 ```
@@ -24,10 +48,11 @@ python3 scripts/jmty_gui.py --port 8790 --open
 ## できること
 
 - アカウントごとに `工場` / `在宅1` / `在宅2` の地域、投稿文、画像状態を一覧表示する
-- `jmty_weekly_assets.py prepare` を `投稿文作成` ボタンから実行する
-- `rotate-sheet --dry-run` を `地域確認` ボタンから実行する
-- `rotate-sheet` を `地域変更` ボタンから実行する
-- `sync-drive --purge-account-images` を `反映` ボタンから実行する
+- `投稿文一括AI再作成` ボタンから、案件素材・投稿文スタイル見本・既存投稿文を参照してCodexで投稿文を再作成する
+- `rotate-sheet --dry-run` を `ローテーション確認` ボタンから実行する
+- `rotate-sheet` を `ローテーションをスプレッドシートに反映` ボタンから実行する
+- `sync-drive --purge-account-images` を `Driveへ反映` ボタンから実行する
+- `sync-sheet` を `スプレッドシートに反映` ボタンから実行する
 - `validate-output` を `検証` ボタンから実行する
 - `inputs/jmty_image_prompt_templates/` の画風プロンプトテンプレートを登録・編集する
 - 画風テンプレートの架空条件サンプル画像を生成し、一覧サムネイルにする
@@ -37,6 +62,7 @@ python3 scripts/jmty_gui.py --port 8790 --open
 - 生成済み画像を `outputs/jmty-weekly/current/<アカウント名>/` に取り込む
 - 画像を確認してOK状態にする
 - 投稿文をGUI上で編集して保存する
+- 投稿文の再作成結果はローカル投稿文ファイルへ上書き保存し、スプレッドシート反映は別ボタンで行う
 - `シート読込` で `アカウント情報` シートの最新データを読み込む
 - メイン画面で、どのアカウントがどの地域でどんな投稿文かを確認する
 - `基本情報設定` で列名・列文字・行番号・セル位置を確認する
@@ -75,7 +101,8 @@ outputs/jmty-weekly/current/<アカウント名>/在宅2.jpg
 3. Codexでその依頼ファイルのプロンプトを使って画像を生成する
 4. GUIの `画像取込` で生成画像を取り込む
 5. プレビューで確認して `OK` を押す
-6. `反映` でGoogle Driveとスプレッドシートへ反映する
+6. `Driveへ反映` でGoogle Driveへアップロードする
+7. `スプレッドシートに反映` でGoogle Sheetsへ投稿文と画像URLを反映する
 
 ## ファイルの置き場所
 
@@ -91,7 +118,8 @@ outputs/jmty-weekly/current/<アカウント名>/在宅2.jpg
 
 `シート読込` を押すと、Google Sheets の `アカウント情報` シートを読み直します。
 読み込んだ内容はGUI上の `アカウント情報一覧` 欄に表示されます。
-普段は、アカウント名、工場地域、工場投稿文、在宅地域、在宅1投稿文、在宅2投稿文だけを見ます。
+普段は、アカウント名、工場地域、工場投稿文、在宅1地域、在宅2地域、在宅1投稿文、在宅2投稿文だけを見ます。
+在宅地域はQ列の1セル内で、1行目を在宅1、2行目を在宅2として扱います。
 
 初期の列設定は次です。
 
@@ -101,7 +129,8 @@ outputs/jmty-weekly/current/<アカウント名>/在宅2.jpg
 | アカウント名 | B |
 | 工場地域 | H |
 | 工場投稿文 | J |
-| 在宅地域 | Q |
+| 在宅1地域 | Q 1行目 |
+| 在宅2地域 | Q 2行目 |
 | 在宅1投稿文 | S |
 | 在宅2投稿文 | U |
 
@@ -135,16 +164,17 @@ outputs/jmty-weekly/current/<アカウント名>/在宅2.jpg
 
 ## 注意
 
-`地域変更`、`反映`、シート編集保存はGoogleスプレッドシートやGoogle Driveを更新します。
+`ローテーションをスプレッドシートに反映`、`スプレッドシートに反映`、シート編集保存はGoogleスプレッドシートを更新します。
+`Driveへ反映` はGoogle Driveのアカウント別フォルダを更新します。
 実行には `gws` が必要です。
 
 ## gws認証
 
 `Access denied. No credentials provided.` と出る場合は、`gws` のGoogleログインが未完了です。
-GUIはファイル保存型の認証情報を使うため、次でログインします。
+GUIはOSのkeyring保存型の認証情報を使うため、次でログインします。
 
 ```bash
-GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file gws auth login
+gws auth login --services drive,sheets
 ```
 
 ブラウザでGoogleログインが終わったら、GUIの `シート読込` を押し直します。

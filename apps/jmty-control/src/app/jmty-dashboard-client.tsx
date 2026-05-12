@@ -45,13 +45,14 @@ const jobLabels: Partial<Record<JobType, string>> = {
   generate_image: "画像生成",
   validate_image: "画像検証",
   sync_drive: "Driveへ反映",
-  rotate_sheet: "地域ローテーション",
-  prepare_posts: "投稿文作成",
+  sync_sheet: "スプレッドシートに反映",
+  rotate_sheet: "ローテーションをスプレッドシートに反映",
+  prepare_posts: "投稿文AI再作成",
   save_post: "投稿文をアプリに保存",
-  sync_post_to_sheet: "投稿文をSheetsへ反映",
-  sync_all_dirty_posts_to_sheet: "未反映をSheetsへ反映",
-  rewrite_post_with_style: "見本で投稿文再作成",
-  rewrite_all_posts_with_style: "投稿文一括再作成",
+  sync_post_to_sheet: "投稿文をスプレッドシートに反映",
+  sync_all_dirty_posts_to_sheet: "未反映をスプレッドシートに反映",
+  rewrite_post_with_style: "投稿文AI再作成",
+  rewrite_all_posts_with_style: "投稿文一括AI再作成",
   save_image_prompt: "画像プロンプト保存",
   cancel_image: "画像登録取消",
   approve_image: "画像OK",
@@ -202,7 +203,7 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
         )}
         <p className="web-preview">{preview(slot.postText || slot.postPreview, 150)}</p>
         <div className="web-chip-row">
-          <span className={`web-badge ${syncTone(slot.postSyncStatus)}`}>Sheets {slot.postSyncStatus || "unknown"}</span>
+          <span className={`web-badge ${syncTone(slot.postSyncStatus)}`}>スプレッドシート {slot.postSyncStatus || "unknown"}</span>
           <span className={`web-badge ${slot.hasPrompt ? "done" : "queued"}`}>プロンプト {slot.hasPrompt ? "あり" : "なし"}</span>
           <span className={`web-badge ${slot.validationStatus === "ok" ? "done" : "queued"}`}>{slot.validationStatus || "未検証"}</span>
         </div>
@@ -284,7 +285,7 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
         <div><strong>{formatDate(snapshot?.syncedAt)}</strong><span>最終同期</span></div>
         <div><strong>{queuedCount}</strong><span>処理待ち</span></div>
         <div><strong>{runningCount}</strong><span>実行中</span></div>
-        <div><strong>{dirtyCount}</strong><span>Sheets未反映</span></div>
+        <div><strong>{dirtyCount}</strong><span>スプレッドシート未反映</span></div>
         <div><strong>{snapshot?.gwsStatus?.label || "未確認"}</strong><span>gws</span></div>
       </section>
 
@@ -309,9 +310,9 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
           <div className="web-panel-headline">
             <h2>ダッシュボード</h2>
             <div className="web-action-row">
-              <button onClick={() => queueJob("prepare_posts")}>投稿文を再作成</button>
+              <button onClick={() => queueJob("prepare_posts")}>投稿文一括AI再作成</button>
               <button onClick={() => queueJob("reload_sheet")}>シート読込</button>
-              <button onClick={() => queueJob("sync_all_dirty_posts_to_sheet")}>未反映をSheetsへ反映</button>
+              <button onClick={() => queueJob("sync_all_dirty_posts_to_sheet")}>未反映をスプレッドシートに反映</button>
             </div>
           </div>
           {accounts.length ? accounts.map((account) => (
@@ -326,7 +327,7 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
       {activeTab === "posts" ? (
         <section className="web-view">
           {renderRulesForm("save_post_rules", "投稿文作成ルール", snapshot?.postRules)}
-          <div className="web-panel-headline"><h2>投稿文管理</h2><button onClick={() => queueJob("rewrite_all_posts_with_style")}>投稿文ランダム再作成</button></div>
+          <div className="web-panel-headline"><h2>投稿文管理</h2><button onClick={() => queueJob("rewrite_all_posts_with_style")}>投稿文一括AI再作成</button></div>
           {accounts.map((account) => (
             <section className="web-account" key={`posts-${account.accountName}`}>
               <div className="web-account-head"><h2>{account.accountName}</h2></div>
@@ -340,8 +341,8 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
                       <textarea name="text" defaultValue={slot.postText || ""} />
                       <div className="web-action-row">
                         <button className="web-primary">アプリに保存</button>
-                        <button type="button" onClick={() => queueJob("sync_post_to_sheet", slotPayload(account, slot))}>Sheetsへ反映</button>
-                        <button type="button" onClick={() => queueJob("rewrite_post_with_style", slotPayload(account, slot))}>見本で再作成</button>
+                        <button type="button" onClick={() => queueJob("sync_post_to_sheet", slotPayload(account, slot))}>スプレッドシートに反映</button>
+                        <button type="button" onClick={() => queueJob("rewrite_post_with_style", slotPayload(account, slot))}>AI再作成</button>
                       </div>
                     </div>
                   </FieldPayloadForm>
@@ -355,9 +356,9 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
       {activeTab === "rotation" ? (
         <section className="web-view web-panel">
           <h2>地域・ローテーション</h2>
-          <p>地域ローテーションやシート再読込はMac workerへ依頼します。</p>
+          <p>ローテーション確認後、スプレッドシートへの反映と再読込をMac workerへ依頼します。</p>
           <div className="web-action-row">
-            <button onClick={() => queueJob("rotate_sheet", { mode: "apply" })}>地域ローテーション</button>
+            <button onClick={() => queueJob("rotate_sheet", { mode: "apply" })}>ローテーションをスプレッドシートに反映</button>
             <button onClick={() => queueJob("reload_sheet")}>シート読込</button>
             <button onClick={() => queueJob("save_sheet_mapping")}>基本情報設定を反映</button>
           </div>
@@ -366,7 +367,13 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
 
       {activeTab === "images" ? (
         <section className="web-view">
-          <div className="web-panel-headline"><h2>画像生成</h2><button onClick={() => queueJob("sync_drive")}>Driveへ反映</button></div>
+          <div className="web-panel-headline">
+            <h2>画像生成</h2>
+            <div className="web-action-row">
+              <button onClick={() => queueJob("sync_drive")}>Driveへ反映</button>
+              <button onClick={() => queueJob("sync_sheet")}>スプレッドシートに反映</button>
+            </div>
+          </div>
           {accounts.map((account) => <section className="web-account" key={`images-${account.accountName}`}><div className="web-account-head"><h2>{account.accountName}</h2></div><div className="web-slot-grid">{account.slots.map((slot) => renderSlotCard(account, slot, "image"))}</div></section>)}
         </section>
       ) : null}

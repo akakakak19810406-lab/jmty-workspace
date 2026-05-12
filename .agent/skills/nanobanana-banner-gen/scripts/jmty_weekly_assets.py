@@ -23,6 +23,7 @@ PARENT_FOLDER_ID = "16P5sOzyJHLemwURON6Wf1i7NjodK3WWF"
 DEFAULT_OUTPUT_ROOT = Path("outputs/jmty-weekly/current")
 DEFAULT_PROMPT_TEMPLATES_DIR = Path("inputs/jmty_image_prompt_templates")
 FACTORY_CASES_PATH = Path(os.environ.get("JMTY_FACTORY_CASES_PATH", "inputs/jmty_factory_cases/2026-02_案件一覧.md"))
+SHEET_CACHE_PATH = Path("outputs/jmty-gui/sheet_cache.json")
 
 FACTORY_REGION_INDEX = 7   # H
 FACTORY_IMAGE_COL = "I"
@@ -33,6 +34,7 @@ REMOTE1_POST_INDEX = 18    # S
 REMOTE2_IMAGE_COL = "T"
 REMOTE2_POST_INDEX = 20    # U
 ROTATION_REPORT_FILENAME = "rotation_report.md"
+DRIVE_SYNC_MANIFEST_FILENAME = "drive_sync_manifest.json"
 IMAGE_ONLY_DIRNAME = "_drive_images"
 IMPROVEMENT_REPORT_DIRNAME = "_improvement_reports"
 DISCORD_JMTY_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_JMTY_WEBHOOK_URL"
@@ -117,7 +119,7 @@ def resolve_gws_executable() -> str:
         "\n".join(
             [
                 "Google Workspace CLI `gws` が見つかりません。",
-                "このスクリプトの rotate-sheet / prepare / sync-drive は、スプレッドシートやDriveを読むために `gws` が必要です。",
+                "このスクリプトの rotate-sheet / prepare / sync-drive / sync-sheet は、スプレッドシートやDriveを読むために `gws` が必要です。",
                 "対応方法:",
                 "- `gws` をPATHへ入れてから再実行する",
                 "- 別名やフルパスで入っている場合は `JMTY_GWS_BIN=/path/to/gws` を指定する",
@@ -130,8 +132,9 @@ def resolve_gws_executable() -> str:
 def run_gws(args: list[str]) -> dict:
     gws_executable = resolve_gws_executable()
     verify_paths = ssl.get_default_verify_paths()
+    keyring_backend = os.environ.get("JMTY_GWS_KEYRING_BACKEND", "keyring")
     shell_cmd = (
-        "export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file; "
+        f"export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND={_shell_quote(keyring_backend)}; "
         + (
             f"export SSL_CERT_FILE={_shell_quote(verify_paths.cafile)}; "
             if verify_paths.cafile
@@ -155,7 +158,7 @@ def run_gws(args: list[str]) -> dict:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
         raise JmtyWeeklyAssetsError(f"`gws` の実行に失敗しました:\n{detail}")
     stdout = result.stdout.strip()
-    if stdout.startswith("Using keyring backend: file"):
+    if stdout.startswith("Using keyring backend:"):
         stdout = stdout.split("\n", 1)[1].strip()
     return json.loads(stdout) if stdout else {}
 
@@ -429,6 +432,53 @@ def delete_drive_files_by_name(parent_id: str, name: str) -> None:
         delete_drive_file(file["id"])
 
 
+def find_drive_file_by_name(parent_id: str, name: str) -> dict | None:
+    res = run_gws(
+        [
+            "drive",
+            "files",
+            "list",
+            "--params",
+            json.dumps(
+                {
+                    "q": f"'{parent_id}' in parents and name = '{name}' and trashed = false",
+                    "fields": "files(id,name,mimeType,modifiedTime)",
+                    "pageSize": 10,
+                    "orderBy": "modifiedTime desc",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    files = res.get("files", [])
+    return files[0] if files else None
+
+
+def drive_manifest_key(task: dict) -> str:
+    return f"{task['account_name']}::{task['kind']}"
+
+
+def load_drive_sync_manifest(output_root: Path) -> dict:
+    path = output_root / DRIVE_SYNC_MANIFEST_FILENAME
+    if not path.exists():
+        return {"items": {}}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"items": {}}
+    return loaded if isinstance(loaded, dict) else {"items": {}}
+
+
+def write_drive_sync_manifest(output_root: Path, manifest: dict) -> None:
+    output_root.mkdir(parents=True, exist_ok=True)
+    manifest["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    manifest["parent_folder_id"] = PARENT_FOLDER_ID
+    (output_root / DRIVE_SYNC_MANIFEST_FILENAME).write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def delete_drive_image_files(parent_id: str) -> int:
     name_filters = " or ".join(f"name contains '{ext}'" for ext in sorted(IMAGE_EXTENSIONS))
     res = run_gws(
@@ -535,7 +585,7 @@ def render_rotation_report(rows: list[list[str]], factory_rows: list[int], remot
     lines.extend(
         [
             "",
-            "■ 在宅（Q列）",
+            "■ 在宅1（Q列1行目）",
             "| アカウント名 | 担当エリア（ローテーション後） |",
             "|------------|---------------------------|",
         ]
@@ -543,7 +593,22 @@ def render_rotation_report(rows: list[list[str]], factory_rows: list[int], remot
     for row_idx in remote_rows:
         row = rows[row_idx]
         account_name = re.sub(r"\s+", " ", row_value(row, 1)) or "未設定"
-        lines.append(f"| {account_name} | {normalize_prefecture(row_value(row, REMOTE_REGION_INDEX)) or '未設定'} |")
+        remote1_region, _ = split_remote_regions(row_value(row, REMOTE_REGION_INDEX))
+        lines.append(f"| {account_name} | {remote1_region or '未設定'} |")
+
+    lines.extend(
+        [
+            "",
+            "■ 在宅2（Q列2行目）",
+            "| アカウント名 | 担当エリア（ローテーション後） |",
+            "|------------|---------------------------|",
+        ]
+    )
+    for row_idx in remote_rows:
+        row = rows[row_idx]
+        account_name = re.sub(r"\s+", " ", row_value(row, 1)) or "未設定"
+        _, remote2_region = split_remote_regions(row_value(row, REMOTE_REGION_INDEX))
+        lines.append(f"| {account_name} | {remote2_region or '未設定'} |")
     return "\n".join(lines)
 
 
@@ -629,6 +694,54 @@ def normalize_prefecture(value: str) -> str:
     if text in special_names:
         return special_names[text]
     return f"{text}県"
+
+
+def split_remote_regions(value: str) -> tuple[str, str]:
+    parts = [
+        normalize_prefecture(part)
+        for part in re.split(r"[\r\n]+", str(value or ""))
+        if part.strip()
+    ]
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], parts[0]
+    return parts[0], parts[1]
+
+
+def region_for_kind(kind: str, value: str) -> str:
+    if kind == "remote1":
+        return split_remote_regions(value)[0]
+    if kind == "remote2":
+        return split_remote_regions(value)[1]
+    return normalize_prefecture(value)
+
+
+def sheet_cache_value(values: dict, key: str) -> str:
+    item = values.get(key, {}) if isinstance(values, dict) else {}
+    return str(item.get("value") or "").strip() if isinstance(item, dict) else ""
+
+
+def load_sheet_region_index() -> dict[tuple[str, str], str]:
+    if not SHEET_CACHE_PATH.exists():
+        return {}
+    try:
+        cache = json.loads(SHEET_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    accounts = cache.get("accounts", []) if isinstance(cache, dict) else []
+    index: dict[tuple[str, str], str] = {}
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        account_name = sanitize_name(str(account.get("account_name") or ""))
+        values = account.get("values") if isinstance(account.get("values"), dict) else {}
+        remote1_region, remote2_region = split_remote_regions(sheet_cache_value(values, "remote_region"))
+        if account_name:
+            index[(account_name, "factory")] = sheet_cache_value(values, "factory_region")
+            index[(account_name, "remote1")] = sheet_cache_value(values, "remote1_region") or remote1_region
+            index[(account_name, "remote2")] = sheet_cache_value(values, "remote2_region") or remote2_region
+    return index
 
 
 def clean_display_text(value: str) -> str:
@@ -727,6 +840,7 @@ def build_banner_prompt(
 ) -> str:
     post_text = strip_markdown_markers(post_text)
     region_text = clean_display_text(region)
+    region_note = f"投稿先地域は「{region_text or '未設定'}」を正として扱い、元の投稿文に別地域が残っていても上書きして解釈する。"
     template_values = {
         "account_name": account_name,
         "task_type": task_type,
@@ -734,11 +848,12 @@ def build_banner_prompt(
         "salary_text": salary_text,
         "role_phrase": role_phrase,
         "post_text": post_text.strip(),
+        "region_note": region_note,
     }
     if prompt_template:
         rendered = render_prompt_template(prompt_template, template_values)
         source = f"テンプレート: {prompt_template_name}\n\n" if prompt_template_name else ""
-        return f"{source}{rendered.strip()}\n\n元の投稿文:\n{post_text.strip()}"
+        return f"{source}{rendered.strip()}\n\n{region_note}\n\n元の投稿文:\n{post_text.strip()}"
 
     common = [
         "あなたは求人広告バナーを作るデザイナーです。",
@@ -752,6 +867,7 @@ def build_banner_prompt(
         specific = [
             "カテゴリ: 工場求人",
             f"投稿先地域の想定: {region_text or '未設定'}",
+            region_note,
             f"職種表記: {role_phrase}",
             f"給与表記: {salary_text}",
             "工場・製造の仕事だとひと目でわかるビジュアル。",
@@ -761,6 +877,7 @@ def build_banner_prompt(
         specific = [
             f"カテゴリ: 在宅求人（{task_type}）",
             f"投稿先地域の想定: {region_text or '未設定'}",
+            region_note,
             f"職種表記: {role_phrase}",
             f"給与表記: {salary_text}",
             "完全在宅、全国OK、出勤不要だとひと目でわかるビジュアル。",
@@ -1225,7 +1342,8 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
 
         factory_region = normalize_prefecture(str(row[FACTORY_REGION_INDEX]).strip() if len(row) > FACTORY_REGION_INDEX else "")
         factory_source_post = str(row[FACTORY_POST_INDEX]).strip() if len(row) > FACTORY_POST_INDEX else ""
-        remote_region = normalize_prefecture(str(row[REMOTE_REGION_INDEX]).strip() if len(row) > REMOTE_REGION_INDEX else "")
+        remote_region_raw = str(row[REMOTE_REGION_INDEX]).strip() if len(row) > REMOTE_REGION_INDEX else ""
+        remote1_region, remote2_region = split_remote_regions(remote_region_raw)
         remote1_source_post = str(row[REMOTE1_POST_INDEX]).strip() if len(row) > REMOTE1_POST_INDEX else ""
         remote2_source_post = str(row[REMOTE2_POST_INDEX]).strip() if len(row) > REMOTE2_POST_INDEX else ""
 
@@ -1272,7 +1390,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
         if remote1_source_post:
             remote1_variation = choose_post_variation(account_no, idx, "remote1")
             remote1_post, remote1_salary = build_post_text(
-                "remote1", remote_region, remote1_source_post, account_name, remote1_variation
+                "remote1", remote1_region, remote1_source_post, account_name, remote1_variation
             )
             remote1_template_name, remote1_template = choose_prompt_template(
                 prompt_templates_dir, "remote1", account_no, idx, "在宅1"
@@ -1286,7 +1404,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                     label_ja="在宅1",
                     image_col=REMOTE1_IMAGE_COL,
                     post_col="S",
-                    region=remote_region,
+                    region=remote1_region,
                     post_text=remote1_post,
                     salary_text=remote1_salary,
                     folder_name=folder_name,
@@ -1295,7 +1413,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                     prompt_filename="在宅1_画像プロンプト.md",
                     prompt_text=build_banner_prompt(
                         "remote1",
-                        remote_region,
+                        remote1_region,
                         remote1_post,
                         account_name,
                         remote1_salary,
@@ -1310,7 +1428,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
         if remote2_source_post:
             remote2_variation = choose_post_variation(account_no, idx, "remote2")
             remote2_post, remote2_salary = build_post_text(
-                "remote2", remote_region, remote2_source_post, account_name, remote2_variation
+                "remote2", remote2_region, remote2_source_post, account_name, remote2_variation
             )
             remote2_template_name, remote2_template = choose_prompt_template(
                 prompt_templates_dir, "remote2", account_no, idx, "在宅2"
@@ -1324,7 +1442,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                     label_ja="在宅2",
                     image_col=REMOTE2_IMAGE_COL,
                     post_col="U",
-                    region=remote_region,
+                    region=remote2_region,
                     post_text=remote2_post,
                     salary_text=remote2_salary,
                     folder_name=folder_name,
@@ -1333,7 +1451,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                     prompt_filename="在宅2_画像プロンプト.md",
                     prompt_text=build_banner_prompt(
                         "remote2",
-                        remote_region,
+                        remote2_region,
                         remote2_post,
                         account_name,
                         remote2_salary,
@@ -1513,6 +1631,7 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
         validate_manifest_task(task)
     validation = validate_task_files(output_root, tasks)
     image_only_root = write_image_only_tree(output_root, tasks)
+    sheet_regions = load_sheet_region_index()
     folder_ids: dict[str, str] = {
         folder["name"]: folder["id"]
         for folder in list_drive_child_folders(PARENT_FOLDER_ID)
@@ -1524,7 +1643,7 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
 
     uploaded_account_docs: set[str] = set()
     purged_account_images: set[str] = set()
-    updates: list[dict] = []
+    manifest: dict = {"items": {}}
     uploaded = 0
     deleted_images = 0
 
@@ -1550,6 +1669,8 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
         cleaned_post_text = strip_markdown_markers(raw_post_text)
         if cleaned_post_text != raw_post_text.strip():
             post_path.write_text(cleaned_post_text + "\n", encoding="utf-8")
+        account_key = sanitize_name(account_name)
+        task["region"] = sheet_regions.get((account_key, task["kind"])) or region_for_kind(task["kind"], str(task.get("region") or ""))
         task["post_text"] = cleaned_post_text
         task["salary_text"] = extract_salary_text(cleaned_post_text, task["kind"])
         task["prompt_text"] = build_banner_prompt(
@@ -1596,29 +1717,32 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
         if prompt_path.exists():
             replace_drive_file(prompt_path, folder_id)
 
+        manifest_item = {
+            "account_name": account_name,
+            "kind": task["kind"],
+            "label_ja": task.get("label_ja", ""),
+            "row_idx": task["row_idx"],
+            "image_col": task["image_col"],
+            "post_col": task["post_col"],
+            "folder_id": folder_id,
+            "folder_name": task["folder_name"],
+            "image_name": image_path.name,
+            "image_file_id": "",
+            "image_missing": not image_exists,
+            "post_path": str(post_path),
+        }
         if image_exists:
             file_id = replace_drive_file(image_path, folder_id)
             make_public(file_id)
             uploaded += 1
-            updates.append(
-                {
-                    "range": f"{SHEET_NAME}!{task['image_col']}{task['row_idx']}",
-                    "values": [[f'=IMAGE("https://drive.google.com/uc?id={file_id}")']],
-                }
-            )
+            manifest_item["image_file_id"] = file_id
         else:
-            print(f"⚠️ 画像が見つからないため画像列は維持します: {image_path}")
-        updates.append(
-            {
-                "range": f"{SHEET_NAME}!{task['post_col']}{task['row_idx']}",
-                "values": [[sheet_post_text(task["kind"], task["post_text"])]],
-            }
-        )
+            print(f"⚠️ 画像が見つからないためDrive画像アップロードをスキップします: {image_path}")
+        manifest["items"][drive_manifest_key(task)] = manifest_item
 
-    if updates:
-        batch_update_sheet(updates)
+    write_drive_sync_manifest(output_root, manifest)
 
-    print(json.dumps({"output_root": str(output_root), "uploaded": uploaded, "updated_cells": len(updates)}, ensure_ascii=False))
+    print(json.dumps({"output_root": str(output_root), "uploaded": uploaded, "updated_cells": 0, "manifest": str(output_root / DRIVE_SYNC_MANIFEST_FILENAME)}, ensure_ascii=False))
 
     print(
         json.dumps(
@@ -1627,6 +1751,94 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
                 "missing_images": validation["missing_images"],
                 "image_only_root": str(image_only_root),
                 "deleted_drive_images": deleted_images,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def resolve_drive_image_file_id(task: dict, manifest: dict, folder_ids: dict[str, str]) -> tuple[str, str]:
+    item = manifest.get("items", {}).get(drive_manifest_key(task), {}) if isinstance(manifest.get("items"), dict) else {}
+    if isinstance(item, dict):
+        manifest_file_id = str(item.get("image_file_id") or "").strip()
+        manifest_image_name = str(item.get("image_name") or "").strip()
+        expected_name = Path(task["image_relpath"]).name
+        if manifest_file_id and (not manifest_image_name or manifest_image_name == expected_name):
+            return manifest_file_id, "manifest"
+
+    account_name = task["account_name"]
+    folder_id = str(item.get("folder_id") or "") if isinstance(item, dict) else ""
+    if not folder_id:
+        folder_id = folder_ids.get(account_name, "")
+    if not folder_id:
+        return "", "folder_missing"
+
+    image_name = Path(task["image_relpath"]).name
+    drive_file = find_drive_file_by_name(folder_id, image_name)
+    if not drive_file:
+        return "", "image_missing"
+    return str(drive_file["id"]), "drive_search"
+
+
+def sync_sheet(output_root: Path) -> None:
+    tasks = read_tasks(output_root)
+    for task in tasks:
+        validate_manifest_task(task)
+
+    manifest = load_drive_sync_manifest(output_root)
+    folder_ids: dict[str, str] = {
+        folder["name"]: folder["id"]
+        for folder in list_drive_child_folders(PARENT_FOLDER_ID)
+    }
+    updates: list[dict] = []
+    warnings: list[str] = []
+    updated_posts = 0
+    updated_images = 0
+
+    for task in tasks:
+        account_dir = output_root / task["folder_name"]
+        post_path = account_dir / Path(task["post_relpath"]).name
+        if not post_path.exists():
+            raise FileNotFoundError(f"投稿文章が見つかりません: {post_path}")
+
+        post_text = strip_markdown_markers(post_path.read_text(encoding="utf-8"))
+        updates.append(
+            {
+                "range": f"{SHEET_NAME}!{task['post_col']}{task['row_idx']}",
+                "values": [[sheet_post_text(task["kind"], post_text)]],
+            }
+        )
+        updated_posts += 1
+
+        image_file_id, source = resolve_drive_image_file_id(task, manifest, folder_ids)
+        if image_file_id:
+            updates.append(
+                {
+                    "range": f"{SHEET_NAME}!{task['image_col']}{task['row_idx']}",
+                    "values": [[f'=IMAGE("https://drive.google.com/uc?id={image_file_id}")']],
+                }
+            )
+            updated_images += 1
+        else:
+            warning = (
+                f"画像IDが見つからないため画像セルは維持します: "
+                f"{task['account_name']} / {task['label_ja']} / {source}"
+            )
+            warnings.append(warning)
+            print(f"⚠️ {warning}")
+
+    if updates:
+        batch_update_sheet(updates)
+
+    print(
+        json.dumps(
+            {
+                "output_root": str(output_root),
+                "updated_cells": len(updates),
+                "updated_posts": updated_posts,
+                "updated_images": updated_images,
+                "skipped_images": len(warnings),
+                "warnings": warnings,
             },
             ensure_ascii=False,
         )
@@ -1669,6 +1881,8 @@ def main() -> int:
         help="アカウントフォルダは残し、既存画像ファイルだけ削除してからアップロードする",
     )
 
+    subparsers.add_parser("sync-sheet")
+
     subparsers.add_parser("validate-output")
 
     notify_parser = subparsers.add_parser("notify-improvement")
@@ -1687,6 +1901,8 @@ def main() -> int:
             rotate_sheet(output_root, dry_run=args.dry_run)
         elif args.command == "sync-drive":
             sync_drive(output_root, purge_existing=args.purge_existing, purge_account_images=args.purge_account_images)
+        elif args.command == "sync-sheet":
+            sync_sheet(output_root)
         elif args.command == "validate-output":
             validate_output(output_root)
         elif args.command == "notify-improvement":

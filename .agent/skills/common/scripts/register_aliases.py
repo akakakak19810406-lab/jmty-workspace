@@ -10,12 +10,14 @@ import platform
 import sys
 
 ALIASES = [
+    ("jmty", 'python3 "{root}/scripts/jmty_gui.py" --open'),
     ("jmty-setup", 'python3 "{root}/.agent/skills/common/scripts/jmty_runtime.py" setup-local-machine --repo-root "{root}"'),
     ("jmty-sync-commands", 'python3 "{root}/scripts/sync_cross_cli_commands.py"'),
     ("jmty-status", 'git -C "{root}" status --short'),
 ]
 
 PS_FUNCTIONS = [
+    ("jmty", 'py -3 "{root}\\scripts\\jmty_gui.py" --open'),
     ("jmty-setup", 'py -3 "{root}\\.agent\\skills\\common\\scripts\\jmty_runtime.py" setup-local-machine --repo-root "{root}" --shell powershell'),
     ("jmty-sync-commands", 'py -3 "{root}\\scripts\\sync_cross_cli_commands.py"'),
     ("jmty-status", 'git -C "{root}" status --short'),
@@ -28,7 +30,7 @@ REGISTERED_FLAG = pathlib.Path.home() / ".config" / "jmty" / "aliases-registered
 _ZSHRC_HOOK_MARKER = "jmty alias auto-check"
 _ZSHRC_HOOK_TMPL = (
     "\n# {marker}\n"
-    "[ -f \"{script}\" ] && python \"{script}\" --root \"{root}\" 2>/dev/null\n"
+    "[ -f \"{script}\" ] && python3 \"{script}\" --root \"{root}\" 2>/dev/null\n"
 )
 
 
@@ -74,13 +76,17 @@ def register_mac(root: pathlib.Path, home: pathlib.Path) -> bool:
     # 古いエイリアス行を除去してから書き直す
     kept = [
         l for l in existing.splitlines()
-        if not any(k in l for k in ("alias jmty-setup", "alias jmty-sync-commands", "alias jmty-status", "JMTY workspace"))
+        if not any(k in l for k in ("alias jmty", "JMTY_ROOT=", "JMTY_GWS_KEYRING_BACKEND=", "GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=", "$HOME/.local/bin", "JMTY workspace"))
     ]
     while kept and not kept[-1].strip():
         kept.pop()
     new_lines = [
         "",
         "# JMTY workspace エイリアス (register_aliases.py により自動登録)",
+        f'export JMTY_ROOT="{root}"',
+        'export JMTY_GWS_KEYRING_BACKEND="file"',
+        'export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-file}"',
+        'export PATH="$HOME/.local/bin:$PATH"',
     ]
     for name, cmd in ALIASES:
         new_lines.append(f"alias {name}='{cmd.format(root=root)}'")
@@ -116,12 +122,18 @@ def register_windows(root: pathlib.Path, home: pathlib.Path) -> bool:
     kept = [
         line for line in existing.splitlines()
         if not any(line.strip().startswith(f"function {name}") for name in managed_names)
+        and not line.strip().startswith("$env:JMTY_ROOT")
+        and not line.strip().startswith("$env:JMTY_GWS_KEYRING_BACKEND")
+        and not line.strip().startswith("$env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND")
         and "JMTY workspace エイリアス" not in line
     ]
 
     new_lines = [
         "",
         "# JMTY workspace エイリアス (register_aliases.py により自動登録)",
+        f'$env:JMTY_ROOT = "{root}"',
+        '$env:JMTY_GWS_KEYRING_BACKEND = "file"',
+        'if (-not $env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND) { $env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "file" }',
     ]
     for name, cmd in PS_FUNCTIONS:
         new_lines.append(f'function {name} {{ {cmd.format(root=root)} }}')
@@ -158,7 +170,7 @@ def main() -> None:
     if registered:
         REGISTERED_FLAG.parent.mkdir(parents=True, exist_ok=True)
         REGISTERED_FLAG.touch()
-        msg = "エイリアス自動登録完了 (jmty-setup / jmty-sync-commands / jmty-status) — 新しいターミナルで使えます"
+        msg = "エイリアス自動登録完了 (jmty / jmty-setup / jmty-sync-commands / jmty-status) — 新しいターミナルで使えます"
         print(json.dumps({"systemMessage": msg}))
 
 

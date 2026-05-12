@@ -10,6 +10,7 @@ export const JOB_TYPES = [
   "generate_image",
   "validate_image",
   "sync_drive",
+  "sync_sheet",
   "rotate_sheet",
   "prepare_posts",
   "save_post",
