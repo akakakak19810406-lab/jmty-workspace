@@ -1,0 +1,609 @@
+/*
+ * JMTY control の管理画面スタイルです。
+ * 余計な装飾を避け、ジョブ状態を素早く確認できる
+ * 密度のある運用画面に整えます。
+ */
+:root {
+  --background: #f7f8fa;
+  --foreground: #1d2433;
+  --muted: #667085;
+  --line: #d9dee7;
+  --panel: #ffffff;
+  --accent: #0b6bcb;
+  --accent-dark: #084f96;
+  --ok: #13795b;
+  --warn: #b54708;
+  --error: #b42318;
+  --code: #101828;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.page {
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0 40px;
+}
+
+.wide-page {
+  width: min(1440px, calc(100vw - 32px));
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+p {
+  margin: 0;
+}
+
+.subtle {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+  align-items: start;
+}
+
+.account-list {
+  display: grid;
+  gap: 16px;
+}
+
+.account-section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.account-head,
+.slot-head,
+.job-feed-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-head {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.account-head h2,
+.slot-head h3 {
+  margin: 0;
+}
+
+.account-head h2 {
+  font-size: 18px;
+}
+
+.slot-head h3 {
+  font-size: 15px;
+}
+
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.slot-card {
+  min-height: 228px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfe;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.slot-preview {
+  min-height: 72px;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.slot-meta,
+.slot-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.slot-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.slot-actions {
+  margin-top: auto;
+}
+
+.side-panel {
+  position: sticky;
+  top: 16px;
+}
+
+.job-feed {
+  display: grid;
+  gap: 12px;
+}
+
+.job-feed-item {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(420px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 22px;
+}
+
+.auth-panel h1 {
+  margin-bottom: 8px;
+}
+
+.auth-links {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  font-size: 14px;
+}
+
+.admin-section {
+  margin-bottom: 18px;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field label {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: #ffffff;
+  color: var(--foreground);
+}
+
+.field textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.button {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.button:hover {
+  background: var(--accent-dark);
+}
+
+.button.secondary {
+  background: #ffffff;
+  color: var(--accent);
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #344054;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.queued {
+  color: #1849a9;
+  background: #eaf1ff;
+}
+
+.running {
+  color: var(--warn);
+  background: #fff3e6;
+}
+
+.done {
+  color: var(--ok);
+  background: #e7f6ef;
+}
+
+.failed {
+  color: var(--error);
+  background: #fdecec;
+}
+
+.cancelled {
+  color: #475467;
+  background: #eef1f5;
+}
+
+code,
+pre {
+  color: var(--code);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.compact-pre {
+  max-width: 360px;
+  max-height: 88px;
+  margin-top: 8px;
+}
+
+pre {
+  max-width: 520px;
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.empty {
+  padding: 28px 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .page {
+    width: min(100% - 20px, 1180px);
+    padding-top: 18px;
+  }
+
+  .topbar,
+  .grid,
+  .dashboard-grid,
+  .slot-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Vercel版 JMTY GUI */
+.jmty-web-shell {
+  width: min(1480px, calc(100vw - 28px));
+  margin: 0 auto;
+  padding: 22px 0 40px;
+  color: var(--foreground);
+}
+.jmty-web-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.jmty-web-header h1 { margin: 0 0 4px; }
+.jmty-web-header p { color: var(--muted); font-size: 13px; }
+.web-header-actions,
+.web-action-row,
+.web-chip-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.web-button,
+.jmty-web-shell button {
+  min-height: 40px;
+  border: 1px solid #cfd6e2;
+  border-radius: 10px;
+  background: #fff;
+  color: #1d2433;
+  padding: 9px 13px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+.jmty-web-shell button:hover,
+.web-button:hover { border-color: var(--accent); text-decoration: none; }
+.web-primary,
+.jmty-web-shell button.web-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.web-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.web-status-grid > div,
+.web-panel,
+.web-account,
+.web-slot-card,
+.web-edit-card,
+.web-sample-card,
+.web-job-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(16, 24, 40, 0.04);
+}
+.web-status-grid > div {
+  padding: 13px;
+  display: grid;
+  gap: 4px;
+}
+.web-status-grid strong { font-size: 18px; }
+.web-status-grid span { color: var(--muted); font-size: 12px; }
+.web-notice {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+  color: #067647;
+  margin: 10px 0;
+}
+.web-notice.error { background: #fef3f2; border-color: #fecdca; color: #b42318; }
+.web-tabs { margin: 14px 0; }
+.web-tabs select { display: none; width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; }
+.web-tab-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.web-tab-buttons button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.web-view { display: grid; gap: 14px; }
+.web-panel { padding: 16px; }
+.web-panel h2,
+.web-panel-headline h2,
+.web-account-head h2,
+.web-slot-head h3,
+.web-edit-card h3 { margin: 0; }
+.web-panel-headline,
+.web-account-head,
+.web-slot-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.web-panel-headline { margin-top: 4px; }
+.web-account { padding: 14px; display: grid; gap: 12px; }
+.web-account-head span { color: var(--muted); }
+.web-slot-grid,
+.web-edit-grid,
+.web-sample-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.web-slot-card,
+.web-edit-card,
+.web-sample-card {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.web-slot-head p { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.web-slot-image,
+.web-image-empty {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  background: #f2f4f7;
+}
+.web-image-empty { display: grid; place-items: center; color: var(--muted); }
+.web-preview { color: #344054; font-size: 13px; line-height: 1.55; min-height: 58px; }
+.web-badge,
+.web-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 800;
+}
+.web-badge.done { background: #ecfdf3; border-color: #abefc6; color: #067647; }
+.web-badge.warning,
+.web-badge.queued { background: #fffaeb; border-color: #fedf89; color: #b54708; }
+.web-badge.running { background: #eff8ff; border-color: #b2ddff; color: #175cd3; }
+.web-badge.failed { background: #fef3f2; border-color: #fecdca; color: #b42318; }
+.web-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.web-job-hint { color: var(--muted); font-size: 12px; }
+.web-form,
+.web-edit-card,
+.web-sample-card { min-width: 0; }
+.web-form textarea,
+.web-form input,
+.web-form select,
+.web-edit-card textarea,
+.web-sample-card textarea,
+.web-two-col input,
+.web-two-col select {
+  width: 100%;
+  border: 1px solid #cfd6e2;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  color: var(--foreground);
+}
+.web-form textarea,
+.web-edit-card textarea,
+.web-sample-card textarea { min-height: 180px; resize: vertical; line-height: 1.55; }
+.web-rule-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.web-rule-grid label,
+.web-two-col label { display: grid; gap: 6px; color: #344054; font-size: 13px; font-weight: 700; }
+.web-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.web-empty { border: 1px dashed var(--line); border-radius: 14px; padding: 24px; text-align: center; color: var(--muted); background: #fff; }
+.web-job-list { display: grid; gap: 10px; }
+.web-job-card { padding: 12px; display: grid; gap: 8px; }
+.web-job-card pre { max-height: 260px; overflow: auto; background: #101828; color: #f2f4f7; border-radius: 10px; padding: 10px; }
+
+@media (max-width: 1100px) {
+  .web-slot-grid,
+  .web-edit-grid,
+  .web-sample-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .web-status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .web-rule-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .jmty-web-shell { width: min(100vw - 20px, 680px); padding-top: 12px; }
+  .jmty-web-header,
+  .web-panel-headline,
+  .web-account-head { align-items: stretch; flex-direction: column; }
+  .web-header-actions,
+  .web-action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .web-header-actions > *,
+  .web-action-row > *,
+  .web-action-grid button { width: 100%; }
+  .web-tabs select { display: block; }
+  .web-tab-buttons { display: none; }
+  .web-status-grid,
+  .web-slot-grid,
+  .web-edit-grid,
+  .web-sample-grid,
+  .web-two-col { grid-template-columns: 1fr; }
+  .web-form textarea,
+  .web-edit-card textarea,
+  .web-sample-card textarea { min-height: 48dvh; font-size: 16px; }
+  .jmty-web-shell button,
+  .web-button { min-height: 44px; }
+}
+@media (max-width: 420px) {
+  .web-header-actions,
+  .web-action-row,
+  .web-action-grid { grid-template-columns: 1fr; }
+}

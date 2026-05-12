@@ -8,6 +8,8 @@ config/discord-git-webhook.json
 __pycache__/
 *.py[cod]
 node_modules/
+.npm-cache/
+.next/
 .venv/
 */.venv/
 
