@@ -1,1 +1,182 @@
-{}
+{
+  "新城安司::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:32:32",
+    "image_path": "outputs/jmty-weekly/current/新城安司/工場.jpg"
+  },
+  "新城安司::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:35:29",
+    "image_path": "outputs/jmty-weekly/current/新城安司/在宅1.jpg"
+  },
+  "新城安司::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:37:49",
+    "image_path": "outputs/jmty-weekly/current/新城安司/在宅2.jpg"
+  },
+  "斎藤孝次::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:40:24",
+    "image_path": "outputs/jmty-weekly/current/斎藤孝次/工場.jpg"
+  },
+  "斎藤孝次::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:42:52",
+    "image_path": "outputs/jmty-weekly/current/斎藤孝次/在宅1.jpg"
+  },
+  "加藤直樹::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:48:05",
+    "image_path": "outputs/jmty-weekly/current/加藤直樹/工場.jpg"
+  },
+  "加藤直樹::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:50:40",
+    "image_path": "outputs/jmty-weekly/current/加藤直樹/在宅1.jpg"
+  },
+  "加藤直樹::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:53:12",
+    "image_path": "outputs/jmty-weekly/current/加藤直樹/在宅2.jpg"
+  },
+  "坪井 清栄 （あいはら）::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:56:05",
+    "image_path": "outputs/jmty-weekly/current/坪井 清栄 （あいはら）/工場.jpg"
+  },
+  "坪井 清栄 （あいはら）::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 02:58:40",
+    "image_path": "outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅1.jpg"
+  },
+  "坪井 清栄 （あいはら）::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 03:01:18",
+    "image_path": "outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅2.jpg"
+  },
+  "尾上治::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 03:05:05",
+    "image_path": "outputs/jmty-weekly/current/尾上治/工場.jpg"
+  },
+  "尾上治::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 03:07:57",
+    "image_path": "outputs/jmty-weekly/current/尾上治/在宅1.jpg"
+  },
+  "尾上治::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 03:10:24",
+    "image_path": "outputs/jmty-weekly/current/尾上治/在宅2.jpg"
+  },
+  "カツアキ::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:40:21",
+    "image_path": "outputs/jmty-weekly/current/カツアキ/工場.jpg"
+  },
+  "カツアキ::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:42:22",
+    "image_path": "outputs/jmty-weekly/current/カツアキ/在宅1.jpg"
+  },
+  "カツアキ::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:44:20",
+    "image_path": "outputs/jmty-weekly/current/カツアキ/在宅2.jpg"
+  },
+  "株式会社Keystone::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:46:20",
+    "image_path": "outputs/jmty-weekly/current/株式会社Keystone/工場.jpg"
+  },
+  "株式会社Keystone::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:48:13",
+    "image_path": "outputs/jmty-weekly/current/株式会社Keystone/在宅1.jpg"
+  },
+  "株式会社Keystone::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:50:11",
+    "image_path": "outputs/jmty-weekly/current/株式会社Keystone/在宅2.jpg"
+  },
+  "近藤::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:52:18",
+    "image_path": "outputs/jmty-weekly/current/近藤/工場.jpg"
+  },
+  "近藤::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:54:12",
+    "image_path": "outputs/jmty-weekly/current/近藤/在宅1.jpg"
+  },
+  "近藤::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:56:05",
+    "image_path": "outputs/jmty-weekly/current/近藤/在宅2.jpg"
+  },
+  "上野::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 06:58:33",
+    "image_path": "outputs/jmty-weekly/current/上野/工場.jpg"
+  },
+  "上野::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:00:29",
+    "image_path": "outputs/jmty-weekly/current/上野/在宅1.jpg"
+  },
+  "上野::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:02:36",
+    "image_path": "outputs/jmty-weekly/current/上野/在宅2.jpg"
+  },
+  "Sho::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:04:52",
+    "image_path": "outputs/jmty-weekly/current/Sho/工場.jpg"
+  },
+  "Sho::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:06:46",
+    "image_path": "outputs/jmty-weekly/current/Sho/在宅1.jpg"
+  },
+  "Sho::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:08:35",
+    "image_path": "outputs/jmty-weekly/current/Sho/在宅2.jpg"
+  },
+  "Akko（山田明子）::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:10:53",
+    "image_path": "outputs/jmty-weekly/current/Akko（山田明子）/工場.jpg"
+  },
+  "Akko（山田明子）::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:12:59",
+    "image_path": "outputs/jmty-weekly/current/Akko（山田明子）/在宅1.jpg"
+  },
+  "Akko（山田明子）::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:15:02",
+    "image_path": "outputs/jmty-weekly/current/Akko（山田明子）/在宅2.jpg"
+  },
+  "あきふぉん （秋田しげとし）::factory": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:17:18",
+    "image_path": "outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/工場.jpg"
+  },
+  "あきふぉん （秋田しげとし）::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:19:16",
+    "image_path": "outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/在宅1.jpg"
+  },
+  "あきふぉん （秋田しげとし）::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:21:09",
+    "image_path": "outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/在宅2.jpg"
+  },
+  "斎藤孝次::remote2": {
+    "approved": false,
+    "saved_at": "2026-05-13 07:28:07",
+    "image_path": "outputs/jmty-weekly/current/斎藤孝次/在宅2.jpg"
+  }
+}

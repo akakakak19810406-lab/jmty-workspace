@@ -502,13 +502,19 @@ def delete_drive_image_files(parent_id: str) -> int:
     )
     deleted = 0
     for file in res.get("files", []):
-        delete_drive_file(file["id"])
-        deleted += 1
+        try:
+            delete_drive_file(file["id"])
+            deleted += 1
+        except JmtyWeeklyAssetsError as exc:
+            print(f"⚠️ Drive画像を削除できないためスキップします: {file.get('name')} / {exc}")
     return deleted
 
 
 def replace_drive_file(file_path: Path, parent_id: str) -> str:
-    delete_drive_files_by_name(parent_id, file_path.name)
+    try:
+        delete_drive_files_by_name(parent_id, file_path.name)
+    except JmtyWeeklyAssetsError as exc:
+        print(f"⚠️ Drive既存ファイルを削除できないため、新規アップロードに切り替えます: {file_path.name} / {exc}")
     return upload_drive_file(file_path, parent_id)
 
 

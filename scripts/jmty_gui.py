@@ -2911,6 +2911,7 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
     codex_prompt = "\n".join(
         [
             "You are being called by a local JMTY GUI to generate one image.",
+            "The user already approved this automated weekly GUI run in the parent session. Do not ask for additional confirmation; generate and save the requested file immediately.",
             "Use Codex's built-in image generation capability from the user's logged-in Codex subscription. Do not use OPENAI_API_KEY or external custom scripts.",
             "Generate exactly one square recruitment banner image from the prompt below. Output must be a raster PNG image.",
             f"Save the final image to this exact workspace path: {image_path}",
@@ -3081,6 +3082,7 @@ def build_template_preview_prompt(
     return "\n".join(
         [
             "You are being called by a local JMTY GUI to generate a style-template preview image.",
+            "The user already approved this automated GUI action in the parent session. Do not ask for additional confirmation; execute the requested file generation immediately.",
             "Use Codex's built-in image generation capability from the user's logged-in Codex subscription. Do not use OPENAI_API_KEY or external custom scripts.",
             derive_instruction,
             "",
@@ -3506,7 +3508,7 @@ def run_weekly_bulk_command_step(
         reload_sheet_state()
 
 
-def collect_weekly_bulk_image_targets(output_root: Path) -> list[dict[str, str]]:
+def collect_weekly_bulk_image_targets(output_root: Path, *, missing_only: bool = False) -> list[dict[str, str]]:
     targets: list[dict[str, str]] = []
     for account in grouped_accounts(output_root):
         account_name = str(account.get("account_name") or "")
@@ -3519,6 +3521,9 @@ def collect_weekly_bulk_image_targets(output_root: Path) -> list[dict[str, str]]
             )
             if not has_text:
                 continue
+            image_path = image_path_for_slot(output_root, account_name, kind)
+            if missing_only and image_path.exists() and image_path.stat().st_size > 0:
+                continue
             targets.append(
                 {
                     "account_name": account_name,
@@ -3529,25 +3534,40 @@ def collect_weekly_bulk_image_targets(output_root: Path) -> list[dict[str, str]]
     return targets
 
 
-def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path) -> None:
+def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path, *, resume: bool = False) -> None:
     try:
         auth = gws_auth_status(force=True)
         if not auth.get("ok"):
             raise RuntimeError(f"GWS認証が必要です: {auth.get('label') or auth.get('detail') or '未認証'}")
 
-        run_weekly_bulk_command_step(job_id, 0, "rotate-sheet", output_root, templates_dir, {})
-        finish_weekly_bulk_step(job_id, 0)
+        if resume:
+            append_job_output(job_id, f"\n[{display_time()}] 途中から再実行: 地域ローテーション反映をスキップ\n")
+            finish_weekly_bulk_step(job_id, 0, "スキップ")
+        else:
+            run_weekly_bulk_command_step(job_id, 0, "rotate-sheet", output_root, templates_dir, {})
+            finish_weekly_bulk_step(job_id, 0)
 
-        update_weekly_bulk_step(job_id, 1, "開始")
-        post_job = start_post_generation(output_root, templates_dir, {"scope": "all", "prefer_sheet": True})
-        finished_post_job = wait_for_child_job(job_id, post_job.id, 1, "投稿文一括AI再作成")
-        finish_weekly_bulk_step(job_id, 1, f"{finished_post_job.generated_post_count or finished_post_job.validation_total}件")
+        if resume:
+            append_job_output(job_id, f"\n[{display_time()}] 途中から再実行: 既存の投稿文を使って投稿文AI再作成をスキップ\n")
+            finish_weekly_bulk_step(job_id, 1, "スキップ")
+        else:
+            update_weekly_bulk_step(job_id, 1, "開始")
+            post_job = start_post_generation(output_root, templates_dir, {"scope": "all", "prefer_sheet": True})
+            finished_post_job = wait_for_child_job(job_id, post_job.id, 1, "投稿文一括AI再作成")
+            finish_weekly_bulk_step(job_id, 1, f"{finished_post_job.generated_post_count or finished_post_job.validation_total}件")
 
-        image_targets = collect_weekly_bulk_image_targets(output_root)
+        image_targets = collect_weekly_bulk_image_targets(output_root, missing_only=resume)
         if not image_targets:
             append_job_output(job_id, f"\n[{display_time()}] 画像生成対象なし\n")
             finish_weekly_bulk_step(job_id, 2, "対象なし")
         else:
+            if resume:
+                all_targets = collect_weekly_bulk_image_targets(output_root)
+                skipped = max(0, len(all_targets) - len(image_targets))
+                append_job_output(
+                    job_id,
+                    f"\n[{display_time()}] 途中から再実行: 生成済み画像 {skipped}件をスキップ / 未生成 {len(image_targets)}件\n",
+                )
             for index, target in enumerate(image_targets, start=1):
                 label = f"{target['account_name']} / {target['label']}"
                 step = weekly_bulk_step(2)
@@ -3589,7 +3609,7 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path) -> 
             "sync-drive",
             output_root,
             templates_dir,
-            {"purge_account_images": True, "purge_existing": False},
+            {"purge_account_images": not resume, "purge_existing": False},
         )
         finish_weekly_bulk_step(job_id, 3)
 
@@ -3600,7 +3620,7 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path) -> 
             job_id,
             status="done",
             progress=100,
-            phase="週次一括実行完了",
+            phase="途中から再実行完了" if resume else "週次一括実行完了",
             step_key="done",
             validation_done=len(WEEKLY_BULK_STEPS),
             validation_total=len(WEEKLY_BULK_STEPS),
@@ -3613,30 +3633,32 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path) -> 
             job_id,
             status="failed",
             progress=100,
-            phase="週次一括実行失敗",
+            phase="途中から再実行失敗" if resume else "週次一括実行失敗",
             finished_at=display_time(),
         )
 
 
-def start_weekly_bulk_job(output_root: Path, templates_dir: Path) -> Job:
+def start_weekly_bulk_job(output_root: Path, templates_dir: Path, *, resume: bool = False) -> Job:
+    command = "weekly-bulk-resume" if resume else "weekly-bulk"
+    label = "途中から再実行" if resume else "週次一括実行"
     with jobs_lock:
         for existing in jobs.values():
             if existing.status == "running":
-                if existing.command == "weekly-bulk":
+                if existing.command in {"weekly-bulk", "weekly-bulk-resume"}:
                     return existing
                 raise ValueError(f"別の処理が実行中です: {existing.command}")
         job = Job(
-            id=f"{now_stamp()}_weekly_bulk",
-            command="weekly-bulk",
+            id=f"{now_stamp()}_{sanitize_name(command)}",
+            command=command,
             started_at=display_time(),
             progress=1,
             phase="開始準備中",
-            label="週次一括実行",
+            label=label,
             validation_total=len(WEEKLY_BULK_STEPS),
             validation_done=0,
         )
         jobs[job.id] = job
-    threading.Thread(target=run_weekly_bulk_job, args=(job.id, output_root, templates_dir), daemon=True).start()
+    threading.Thread(target=run_weekly_bulk_job, args=(job.id, output_root, templates_dir), kwargs={"resume": resume}, daemon=True).start()
     return job
 
 
@@ -4211,6 +4233,8 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                     job = start_post_generation(self.output_root, self.templates_dir, {"scope": "all"})
                 elif command == "weekly-bulk":
                     job = start_weekly_bulk_job(self.output_root, self.templates_dir)
+                elif command == "weekly-bulk-resume":
+                    job = start_weekly_bulk_job(self.output_root, self.templates_dir, resume=True)
                 else:
                     job = start_job(command, self.output_root, self.templates_dir, payload)
                 self.send_json({"ok": True, "job": job.__dict__})
@@ -7281,6 +7305,7 @@ INDEX_HTML = r"""<!doctype html>
             </div>
             <div class="panel-actions">
               <button class="danger" data-command="weekly-bulk" data-icon="play_arrow">週次一括実行</button>
+              <button class="blue" data-command="weekly-bulk-resume" data-icon="resume">途中から再実行</button>
             </div>
           </div>
           <div class="panel-body">
@@ -7905,6 +7930,7 @@ INDEX_HTML = r"""<!doctype html>
       "rotate-dry-run": "ローテーション確認",
       "rotate-sheet": "ローテーションをスプレッドシートに反映",
       "weekly-bulk": "週次一括実行",
+      "weekly-bulk-resume": "途中から再実行",
       "sync-drive": "Driveへ反映",
       "sync-sheet": "スプレッドシートに反映",
       "validate-output": "検証",
@@ -7919,6 +7945,7 @@ INDEX_HTML = r"""<!doctype html>
     const commandConfirmations = {
       "rotate-sheet": "ローテーション結果をスプレッドシートに反映します。Google Sheets の地域割り振りを1つずつずらします。続行しますか？",
       "weekly-bulk": "週次一括実行を開始します。地域と投稿文のローテーション反映、投稿文AI再作成、全員分の画像生成、Drive反映、スプレッドシート反映を順番に実行します。長時間かかります。続行しますか？",
+      "weekly-bulk-resume": "途中から再実行します。地域ローテーションと投稿文再作成はスキップし、生成済み画像を飛ばして未生成画像、Drive反映、スプレッドシート反映を実行します。続行しますか？",
       "sync-drive": "Driveへ反映します。Google Drive のアカウント別フォルダへ画像・投稿文・プロンプトを送ります。スプレッドシートは更新しません。続行しますか？",
       "sync-sheet": "スプレッドシートに反映します。ローカル投稿文とDrive画像URLをGoogle Sheetsへ送ります。続行しますか？",
     };
@@ -8465,8 +8492,8 @@ INDEX_HTML = r"""<!doctype html>
     function renderWeeklyBulkStatus(data) {
       const root = $("weekly-bulk-status");
       if (!root) return;
-      const job = (data.jobs || []).find((item) => item.command === "weekly-bulk" && item.status === "running")
-        || (data.jobs || []).find((item) => item.command === "weekly-bulk");
+      const job = (data.jobs || []).find((item) => ["weekly-bulk", "weekly-bulk-resume"].includes(item.command) && item.status === "running")
+        || (data.jobs || []).find((item) => ["weekly-bulk", "weekly-bulk-resume"].includes(item.command));
       const doneCount = Number(job?.validation_done || 0);
       const activeIndex = Math.min(weeklyBulkSteps.length - 1, Math.max(0, doneCount));
       const failed = job?.status === "failed";
@@ -9921,7 +9948,7 @@ INDEX_HTML = r"""<!doctype html>
               ${hasOutput ? `<span class="job-expand-hint">${expanded ? "ログを隠す" : "ログを表示"}</span>` : ""}
             </div>
             ${job.account_name || job.template_name ? `<div class="meta">${job.account_name ? `${esc(job.account_name)} / ` : ""}${esc(job.label || job.kind || "")}${job.template_name ? " / " + esc(job.template_name) : ""}</div>` : ""}
-            ${job.validation_total ? `<div class="meta">${job.command === "weekly-bulk" ? "工程" : "検証"} ${Number(job.validation_done || 0)}/${Number(job.validation_total || 0)}${job.command === "weekly-bulk" ? "" : ` / 要確認 ${Number(job.suspect_count || 0)}`}</div>` : ""}
+            ${job.validation_total ? `<div class="meta">${["weekly-bulk", "weekly-bulk-resume"].includes(job.command) ? "工程" : "検証"} ${Number(job.validation_done || 0)}/${Number(job.validation_total || 0)}${["weekly-bulk", "weekly-bulk-resume"].includes(job.command) ? "" : ` / 要確認 ${Number(job.suspect_count || 0)}`}</div>` : ""}
             ${job.progress ? `<div class="progress-track"><div class="progress-fill" style="--progress: ${Math.max(0, Math.min(100, Number(job.progress || 0)))}%"></div></div><div class="meta">${esc(job.phase || "")} ${Number(job.progress || 0)}%</div>` : ""}
             <div class="meta">${esc(job.started_at)}${job.finished_at ? " -> " + esc(job.finished_at) : ""}</div>
             ${hasOutput ? `

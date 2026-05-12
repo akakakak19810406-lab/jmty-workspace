@@ -84,8 +84,12 @@ def register_mac(root: pathlib.Path, home: pathlib.Path) -> bool:
         "",
         "# JMTY workspace エイリアス (register_aliases.py により自動登録)",
         f'export JMTY_ROOT="{root}"',
-        'export JMTY_GWS_KEYRING_BACKEND="file"',
-        'export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-file}"',
+        'export JMTY_GWS_KEYRING_BACKEND="keyring"',
+        'export GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:-keyring}"',
+        'export JMTY_CODEX_IMAGE_TIMEOUT_SECONDS="${JMTY_CODEX_IMAGE_TIMEOUT_SECONDS:-10800}"',
+        'export JMTY_CODEX_VALIDATION_TIMEOUT_SECONDS="${JMTY_CODEX_VALIDATION_TIMEOUT_SECONDS:-10800}"',
+        'export JMTY_CODEX_REWRITE_TIMEOUT_SECONDS="${JMTY_CODEX_REWRITE_TIMEOUT_SECONDS:-10800}"',
+        'export JMTY_CODEX_POST_GENERATION_TIMEOUT_SECONDS="${JMTY_CODEX_POST_GENERATION_TIMEOUT_SECONDS:-10800}"',
         'export PATH="$HOME/.local/bin:$PATH"',
     ]
     for name, cmd in ALIASES:
@@ -132,8 +136,12 @@ def register_windows(root: pathlib.Path, home: pathlib.Path) -> bool:
         "",
         "# JMTY workspace エイリアス (register_aliases.py により自動登録)",
         f'$env:JMTY_ROOT = "{root}"',
-        '$env:JMTY_GWS_KEYRING_BACKEND = "file"',
-        'if (-not $env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND) { $env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "file" }',
+        '$env:JMTY_GWS_KEYRING_BACKEND = "keyring"',
+        'if (-not $env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND) { $env:GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "keyring" }',
+        'if (-not $env:JMTY_CODEX_IMAGE_TIMEOUT_SECONDS) { $env:JMTY_CODEX_IMAGE_TIMEOUT_SECONDS = "10800" }',
+        'if (-not $env:JMTY_CODEX_VALIDATION_TIMEOUT_SECONDS) { $env:JMTY_CODEX_VALIDATION_TIMEOUT_SECONDS = "10800" }',
+        'if (-not $env:JMTY_CODEX_REWRITE_TIMEOUT_SECONDS) { $env:JMTY_CODEX_REWRITE_TIMEOUT_SECONDS = "10800" }',
+        'if (-not $env:JMTY_CODEX_POST_GENERATION_TIMEOUT_SECONDS) { $env:JMTY_CODEX_POST_GENERATION_TIMEOUT_SECONDS = "10800" }',
     ]
     for name, cmd in PS_FUNCTIONS:
         new_lines.append(f'function {name} {{ {cmd.format(root=root)} }}')
