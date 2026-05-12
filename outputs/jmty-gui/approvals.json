@@ -1,0 +1,12 @@
+{
+  "Sho::factory": {
+    "approved": true,
+    "approved_at": "2026-05-12 10:37:15",
+    "image_path": "outputs/jmty-weekly/current/Sho/工場.jpg"
+  },
+  "Sho::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-12 14:09:21",
+    "image_path": "outputs/jmty-weekly/current/Sho/在宅1.jpg"
+  }
+}
