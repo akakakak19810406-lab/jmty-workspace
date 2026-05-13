@@ -53,6 +53,7 @@ python3 scripts/jmty_gui.py --port 8790 --open
 - `rotate-sheet` を `ローテーションをスプレッドシートに反映` ボタンから実行する
 - `sync-drive --purge-account-images` を `Driveへ反映` ボタンから実行する
 - `sync-sheet` を `スプレッドシートに反映` ボタンから実行する
+- `validate-sheet-posts` を `投稿文整合性検証` ボタンから dry-run 実行する
 - `validate-output` を `検証` ボタンから実行する
 - `inputs/jmty_image_prompt_templates/` の画風プロンプトテンプレートを登録・編集する
 - 画風テンプレートの架空条件サンプル画像を生成し、一覧サムネイルにする
@@ -166,6 +167,7 @@ outputs/jmty-weekly/current/<アカウント名>/在宅2.jpg
 
 `ローテーションをスプレッドシートに反映`、`スプレッドシートに反映`、シート編集保存はGoogleスプレッドシートを更新します。
 `Driveへ反映` はGoogle Driveのアカウント別フォルダを更新します。
+`投稿文整合性検証` は通常ボタンでは dry-run のみです。週次一括実行の最後だけ、画像条件と投稿文がずれている投稿文セルを `--repair` で更新します。
 実行には `gws` が必要です。
 
 ## gws認証

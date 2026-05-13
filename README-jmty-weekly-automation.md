@@ -27,6 +27,7 @@
 
 ## 実行の考え方
 Drive への画像アップロードは `sync-drive`、スプレッドシート反映は `sync-sheet` として分けて実行します。GWS 認証切れなどでDrive反映が失敗した場合だけ、Chrome で Google Drive を開いて行います。
+最終一括実行では `sync-sheet` の後に `validate-sheet-posts --repair` を実行し、画像条件と投稿文がずれたセルだけを修正してから再取得確認します。
 
 画像生成は Codex の built-in 画像生成ツールを使います。Python から直接画像生成 API を叩く方式にはしません。
 
@@ -102,3 +103,10 @@ python3 .agent/skills/nanobanana-banner-gen/scripts/jmty_weekly_assets.py notify
 - 投稿文に実URLが混ざっていない
 - 在宅投稿には `完全在宅` がある
 - 工場画像と在宅画像の取り違えがないか OCR で確認する
+
+`validate-sheet-posts` で Google Sheets 反映後の投稿文セルを確認します。
+
+- 既定は dry-run で、修正対象セルと理由だけを JSON で出力する
+- `--repair` を付けると、不一致または品質問題がある投稿文セルだけを更新する
+- 更新後はシートを再取得し、残件数を `remaining_issue_count` に出力する
+- 必要な場合だけ `--drive-ocr` を付け、シート画像セルのDrive画像も一時取得してOCRする

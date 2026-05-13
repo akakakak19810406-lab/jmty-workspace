@@ -1,0 +1,204 @@
+<!--
+  JMTY画像ダウンロードWeb Appのスマホ用HTMLです。
+  Code.gsで取得した画像URLまたはdata URLを表示し、保存用リンクを大きなボタンで出します。
+  スプレッドシートのセルURLから直接開く前提の単機能画面です。
+-->
+<!doctype html>
+<html lang="ja">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fa;
+        --text: #18202a;
+        --muted: #667085;
+        --line: #d7dde7;
+        --primary: #0b57d0;
+        --primary-dark: #0842a0;
+        --surface: #ffffff;
+        --danger: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 0;
+      }
+
+      main {
+        width: min(100%, 720px);
+        margin: 0 auto;
+        padding: max(18px, env(safe-area-inset-top)) 16px max(22px, env(safe-area-inset-bottom));
+      }
+
+      .top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.25;
+      }
+
+      .meta {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .badge {
+        flex: 0 0 auto;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .preview {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .preview img {
+        display: block;
+        width: 100%;
+        height: auto;
+        min-height: 240px;
+        object-fit: contain;
+        background: #0b0f19;
+      }
+
+      .actions {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      a.button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        border-radius: 8px;
+        border: 1px solid var(--primary);
+        background: var(--primary);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      a.button.secondary {
+        background: var(--surface);
+        color: var(--primary-dark);
+      }
+
+      .notice,
+      .error {
+        margin-top: 14px;
+        border-radius: 8px;
+        padding: 12px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .error {
+        border-color: #f3b4ad;
+        color: var(--danger);
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+
+    <script>
+      const model = <?!= model ?>;
+      const app = document.getElementById('app');
+
+      function text(value) {
+        return String(value || '');
+      }
+
+      function escapeHtml(value) {
+        return text(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }
+
+      function renderError() {
+        app.innerHTML = `
+          <div class="top">
+            <div>
+              <h1>画像を取得できません</h1>
+              <div class="meta">JMTY画像ダウンロード</div>
+            </div>
+          </div>
+          <div class="error">${escapeHtml(model.message)}</div>
+        `;
+      }
+
+      function renderPage() {
+        const title = [model.accountName, model.label].filter(Boolean).join(' / ') || 'JMTY画像';
+        const debug = [
+          model.sheetName,
+          model.imageCell,
+          model.sourceType,
+        ].filter(Boolean).join(' / ');
+
+        app.innerHTML = `
+          <div class="top">
+            <div>
+              <h1>${escapeHtml(title)}</h1>
+              <div class="meta">${escapeHtml(debug)}</div>
+            </div>
+            <div class="badge">行 ${escapeHtml(model.row)}</div>
+          </div>
+
+          <div class="preview">
+            <img src="${escapeHtml(model.imageUrl)}" alt="${escapeHtml(title)}">
+          </div>
+
+          <div class="actions">
+            <a class="button" href="${escapeHtml(model.downloadUrl)}" download="${escapeHtml(model.fileName)}">画像を保存</a>
+            <a class="button secondary" href="${escapeHtml(model.openUrl || model.imageUrl)}" target="_blank" rel="noopener">画像を開く</a>
+            <a class="button secondary" href="${escapeHtml(model.sheetUrl)}" target="_blank" rel="noopener">シートへ戻る</a>
+          </div>
+
+          ${model.inlineImageError ? `<div class="notice">${escapeHtml(model.inlineImageError)}</div>` : ''}
+        `;
+      }
+
+      if (model.ok) {
+        renderPage();
+      } else {
+        renderError();
+      }
+    </script>
+  </body>
+</html>

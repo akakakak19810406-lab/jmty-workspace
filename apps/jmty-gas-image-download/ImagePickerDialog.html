@@ -1,0 +1,1055 @@
+<!--
+  このHTMLは、PCのGoogle Sheets上でアカウントと画像種別を選ぶためのモーダルです。
+  B列のアカウント情報を中心に一覧化し、画像プレビューと保存対象の選択を行います。
+  選択後はこの画面内で、単体または全画像を個別保存します。
+-->
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #ffffff;
+        --surface-muted: #f6f8fb;
+        --surface-strong: #eef3f8;
+        --line: #d6dde8;
+        --line-strong: #b8c4d4;
+        --text: #17202c;
+        --muted: #667085;
+        --primary: #2563eb;
+        --primary-strong: #1d4ed8;
+        --primary-soft: #eaf1ff;
+        --error: #b42318;
+        --success: #087443;
+        font-family: Arial, "Hiragino Sans", "Yu Gothic", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+      }
+
+      body {
+        margin: 0;
+        color: var(--text);
+        background: var(--surface);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        padding: 10px 14px;
+        transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--line-strong);
+        background: var(--surface-muted);
+      }
+
+      button:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      button:focus,
+      input:focus {
+        outline: 3px solid rgba(37, 99, 235, 0.22);
+        outline-offset: 2px;
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.48;
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        height: 100vh;
+        max-height: 100vh;
+        min-height: 0;
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 22px 24px 16px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      }
+
+      .title {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+        min-width: 220px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+
+      .pill.active {
+        border-color: #9bb8ff;
+        background: var(--primary-soft);
+        color: var(--primary-strong);
+      }
+
+      .mobile-tabs {
+        display: none;
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        min-height: 0;
+        overflow: hidden;
+        border-right: 1px solid var(--line);
+        background: var(--surface-muted);
+        padding: 18px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+      }
+
+      label {
+        color: #344054;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .search-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+
+      input {
+        width: 100%;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        padding: 10px 12px;
+      }
+
+      input::placeholder {
+        color: #8a95a6;
+      }
+
+      .list-meta {
+        min-height: 22px;
+        margin: 12px 0 10px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .account-list {
+        display: grid;
+        align-content: start;
+        gap: 8px;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 2px;
+      }
+
+      .account-option {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 58px;
+        border-color: transparent;
+        background: var(--surface);
+        text-align: left;
+      }
+
+      .account-option[aria-pressed="true"] {
+        border-color: var(--primary);
+        background: var(--primary-soft);
+        box-shadow: 0 0 0 1px var(--primary) inset;
+      }
+
+      .account-option:disabled {
+        border-color: var(--line);
+        background: #f2f4f7;
+      }
+
+      .account-main {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .account-name {
+        overflow: hidden;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .account-sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .count-badge {
+        min-width: 64px;
+        border-radius: 999px;
+        background: var(--surface-strong);
+        color: #344054;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 5px 8px;
+        text-align: center;
+      }
+
+      .detail {
+        display: grid;
+        grid-template-rows: auto auto auto;
+        align-content: start;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 18px 20px;
+      }
+
+      .detail-head {
+        display: grid;
+        gap: 6px;
+        padding-bottom: 14px;
+      }
+
+      .detail-title {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.35;
+        letter-spacing: 0;
+      }
+
+      .detail-meta {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .target-list {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .target-option {
+        display: grid;
+        grid-template-columns: 52px 1fr auto;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        min-height: 66px;
+        text-align: left;
+      }
+
+      .target-option[aria-pressed="true"] {
+        border-color: var(--primary);
+        background: var(--primary-soft);
+        box-shadow: 0 0 0 1px var(--primary) inset;
+      }
+
+      .target-thumb {
+        width: 52px;
+        height: 52px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-muted);
+        object-fit: contain;
+      }
+
+      .target-all-thumb {
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-strong);
+        color: var(--primary-strong);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .target-text {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .target-title {
+        font-weight: 700;
+      }
+
+      .target-sub {
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .check-mark {
+        display: grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--primary);
+        color: #ffffff;
+        font-size: 13px;
+        font-weight: 800;
+        opacity: 0;
+      }
+
+      .target-option[aria-pressed="true"] .check-mark {
+        opacity: 1;
+      }
+
+      .preview-grid {
+        display: grid;
+        align-content: start;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        min-height: 0;
+        overflow: visible;
+      }
+
+      .preview-item {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .preview-item img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-muted);
+        object-fit: contain;
+      }
+
+      .preview-label {
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .footer {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 18px;
+        border-top: 1px solid var(--line);
+        background: var(--surface);
+        box-shadow: 0 -10px 24px rgba(20, 33, 61, 0.06);
+        z-index: 2;
+      }
+
+      .status {
+        min-height: 22px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .status.error {
+        color: var(--error);
+        font-weight: 700;
+      }
+
+      .footer-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #ffffff;
+        font-weight: 700;
+      }
+
+      .primary:hover:not(:disabled) {
+        border-color: var(--primary-strong);
+        background: var(--primary-strong);
+      }
+
+      .empty {
+        display: grid;
+        place-items: center;
+        min-height: 220px;
+        border: 1px dashed var(--line-strong);
+        border-radius: 10px;
+        color: var(--muted);
+        text-align: center;
+        padding: 22px;
+      }
+
+      @media (max-width: 680px) {
+        html,
+        body {
+          height: 100%;
+          min-height: 100%;
+        }
+
+        .app-shell {
+          grid-template-rows: auto auto minmax(0, 1fr) auto;
+          height: 100vh;
+          height: 100dvh;
+          min-height: 0;
+        }
+
+        .header,
+        .footer {
+          display: grid;
+        }
+
+        .header {
+          gap: 10px;
+          padding: 16px 14px 12px;
+        }
+
+        .title {
+          font-size: 19px;
+        }
+
+        .summary,
+        .footer-actions {
+          justify-content: stretch;
+        }
+
+        .summary {
+          min-width: 0;
+        }
+
+        .mobile-tabs {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          padding: 10px 14px;
+          border-bottom: 1px solid var(--line);
+          background: var(--surface);
+        }
+
+        .tab-button {
+          min-height: 42px;
+          border-color: var(--line);
+          background: var(--surface-muted);
+          color: var(--muted);
+          font-size: 14px;
+          font-weight: 800;
+        }
+
+        .tab-button[aria-selected="true"] {
+          border-color: var(--primary);
+          background: var(--primary);
+          color: #ffffff;
+          box-shadow: 0 0 0 1px var(--primary) inset;
+        }
+
+        .content {
+          display: block;
+          min-height: 0;
+          overflow: hidden;
+        }
+
+        .sidebar {
+          height: 100%;
+          min-height: 0;
+          overflow: hidden;
+          border-right: 0;
+          border-bottom: 0;
+          padding: 14px;
+        }
+
+        .detail {
+          height: 100%;
+          min-height: 0;
+          padding: 14px;
+        }
+
+        .app-shell[data-active-tab="accounts"] .detail {
+          display: none;
+        }
+
+        .app-shell[data-active-tab="images"] .sidebar {
+          display: none;
+        }
+
+        .account-list {
+          max-height: none;
+        }
+
+        .preview-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .target-option {
+          grid-template-columns: 48px minmax(0, 1fr) 24px;
+          min-height: 62px;
+        }
+
+        .target-thumb,
+        .target-all-thumb {
+          width: 48px;
+          height: 48px;
+        }
+
+        .footer {
+          grid-template-columns: 1fr;
+          padding: 12px 14px max(12px, env(safe-area-inset-bottom));
+        }
+
+        .footer-actions,
+        .search-row {
+          display: grid;
+          grid-template-columns: 1fr;
+        }
+
+        .footer-actions button {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        button {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="appShell" class="app-shell" data-active-tab="accounts">
+      <header class="header">
+        <div>
+          <h1 class="title">アカウント画像を選択</h1>
+        </div>
+        <div class="summary" aria-live="polite">
+          <span id="accountCountPill" class="pill">読み込み中</span>
+          <span id="imageCountPill" class="pill active">画像 0 件</span>
+        </div>
+      </header>
+
+      <nav class="mobile-tabs" aria-label="選択ステップ">
+        <button id="accountsTabButton" class="tab-button" type="button" aria-selected="true">アカウント選択</button>
+        <button id="imagesTabButton" class="tab-button" type="button" aria-selected="false">画像選択</button>
+      </nav>
+
+      <main class="content">
+        <section class="sidebar" aria-label="アカウント一覧">
+          <div class="field">
+            <label for="searchInput">検索</label>
+            <div class="search-row">
+              <input id="searchInput" type="search" placeholder="B列のアカウント情報・Noで絞り込み" autocomplete="off">
+              <button id="clearButton" type="button">クリア</button>
+            </div>
+          </div>
+          <div id="listMeta" class="list-meta">読み込み中...</div>
+          <div id="accountList" class="account-list"></div>
+        </section>
+
+        <section class="detail" aria-label="保存対象">
+          <div class="detail-head">
+            <h2 id="detailTitle" class="detail-title">アカウントを選択</h2>
+            <div id="detailMeta" class="detail-meta"></div>
+          </div>
+          <div id="targetList" class="target-list"></div>
+          <div id="previewGrid" class="preview-grid"></div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div id="status" class="status" aria-live="polite">読み込み中...</div>
+        <div class="footer-actions">
+          <button id="closeButton" type="button">閉じる</button>
+          <button id="openButton" class="primary" type="button" disabled>保存する</button>
+        </div>
+      </footer>
+    </div>
+
+    <script>
+      var allAccounts = [];
+      var filteredAccounts = [];
+      var previewCache = {};
+      var previewLoadingRows = {};
+      var selectedRow = 0;
+      var selectedMode = "all";
+      var selectedImageKey = "";
+      var isSaving = false;
+      var activeTab = "accounts";
+
+      var accountTabButton = document.getElementById("accountsTabButton");
+      var accountList = document.getElementById("accountList");
+      var accountCountPill = document.getElementById("accountCountPill");
+      var appShell = document.getElementById("appShell");
+      var imageCountPill = document.getElementById("imageCountPill");
+      var imagesTabButton = document.getElementById("imagesTabButton");
+      var clearButton = document.getElementById("clearButton");
+      var closeButton = document.getElementById("closeButton");
+      var detailMeta = document.getElementById("detailMeta");
+      var detailTitle = document.getElementById("detailTitle");
+      var listMeta = document.getElementById("listMeta");
+      var openButton = document.getElementById("openButton");
+      var previewGrid = document.getElementById("previewGrid");
+      var searchInput = document.getElementById("searchInput");
+      var statusEl = document.getElementById("status");
+      var targetList = document.getElementById("targetList");
+
+      searchInput.addEventListener("input", renderAccounts);
+      accountTabButton.addEventListener("click", function() {
+        setActiveTab("accounts");
+      });
+      imagesTabButton.addEventListener("click", function() {
+        setActiveTab("images");
+      });
+      closeButton.addEventListener("click", closeView);
+      clearButton.addEventListener("click", function() {
+        searchInput.value = "";
+        searchInput.focus();
+        renderAccounts();
+      });
+      openButton.addEventListener("click", saveSelectedImages);
+
+      google.script.run
+        .withSuccessHandler(function(result) {
+          allAccounts = (result && result.accounts) || [];
+          var firstAvailable = findFirstAvailableAccount(allAccounts);
+          selectedRow = firstAvailable ? firstAvailable.row : 0;
+          selectedMode = "all";
+          selectedImageKey = firstAvailable && firstAvailable.images[0] ? firstAvailable.images[0].imageKey : "";
+          renderAccounts();
+          setStatus(allAccounts.length + " 件のアカウントを読み込みました。", false);
+        })
+        .withFailureHandler(function(error) {
+          setStatus(error && error.message ? error.message : String(error), true);
+          renderEmpty("アカウント情報を読み込めませんでした。");
+        })
+        .getAccountImageOptions();
+
+      function renderAccounts() {
+        var query = searchInput.value.trim().toLowerCase();
+        filteredAccounts = allAccounts.filter(function(account) {
+          return !query || account.label.toLowerCase().indexOf(query) !== -1;
+        });
+
+        if (!getSelectedAccount()) {
+          var nextAccount = findFirstAvailableAccount(filteredAccounts);
+          selectedRow = nextAccount ? nextAccount.row : 0;
+          selectedMode = "all";
+          selectedImageKey = nextAccount && nextAccount.images[0] ? nextAccount.images[0].imageKey : "";
+        }
+
+        accountList.innerHTML = "";
+        filteredAccounts.forEach(function(account) {
+          var option = document.createElement("button");
+          option.type = "button";
+          option.className = "account-option";
+          option.disabled = account.imageCount === 0;
+          option.setAttribute("aria-pressed", account.row === selectedRow ? "true" : "false");
+          option.addEventListener("click", function() {
+            selectAccount(account);
+          });
+
+          var main = document.createElement("span");
+          main.className = "account-main";
+
+          var name = document.createElement("span");
+          name.className = "account-name";
+          name.textContent = account.label;
+
+          var sub = document.createElement("span");
+          sub.className = "account-sub";
+          sub.textContent = "行 " + account.row;
+
+          var badge = document.createElement("span");
+          badge.className = "count-badge";
+          badge.textContent = "画像 " + account.imageCount;
+
+          main.appendChild(name);
+          main.appendChild(sub);
+          option.appendChild(main);
+          option.appendChild(badge);
+          accountList.appendChild(option);
+        });
+
+        if (filteredAccounts.length === 0) {
+          accountList.appendChild(createEmptyBlock("一致するアカウントがありません。"));
+        }
+
+        accountCountPill.textContent = "アカウント " + allAccounts.length + " 件";
+        listMeta.textContent = filteredAccounts.length + " 件を表示";
+        renderDetail();
+      }
+
+      function renderDetail() {
+        var account = getSelectedAccount();
+        targetList.innerHTML = "";
+        previewGrid.innerHTML = "";
+
+        if (!account) {
+          renderEmpty("画像があるアカウントを選択してください。");
+          return;
+        }
+
+        detailTitle.textContent = account.label;
+        detailMeta.textContent = "行 " + account.row + " / 画像 " + account.imageCount + " 件";
+        imageCountPill.textContent = "選択中 画像 " + account.imageCount + " 件";
+        updateSaveButton(account);
+
+        if (account.imageCount === 0) {
+          targetList.appendChild(createEmptyBlock("このアカウントには画像がありません。"));
+          updateTabButtons();
+          return;
+        }
+
+        targetList.appendChild(createTargetOption(account, null));
+        account.images.forEach(function(image) {
+          targetList.appendChild(createTargetOption(account, image));
+          previewGrid.appendChild(createPreviewItem(image));
+        });
+        loadPreviewsForAccount(account);
+        updateTabButtons();
+      }
+
+      function createTargetOption(account, image) {
+        var mode = image ? "single" : "all";
+        var isSelected = selectedMode === mode && (!image || selectedImageKey === image.imageKey);
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "target-option";
+        button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+        button.addEventListener("click", function() {
+          selectedMode = mode;
+          selectedImageKey = image ? image.imageKey : (account.images[0] || {}).imageKey || "";
+          renderDetail();
+        });
+
+        var thumb;
+        if (image) {
+          thumb = document.createElement("img");
+          thumb.className = "target-thumb";
+          thumb.src = getPreviewUrl(account.row, image);
+          thumb.alt = image.label;
+        } else {
+          thumb = document.createElement("span");
+          thumb.className = "target-all-thumb";
+          thumb.textContent = account.imageCount;
+        }
+
+        var text = document.createElement("span");
+        text.className = "target-text";
+
+        var title = document.createElement("span");
+        title.className = "target-title";
+        title.textContent = image ? image.label : "全部を1枚ずつ保存";
+
+        var sub = document.createElement("span");
+        sub.className = "target-sub";
+        sub.textContent = image ? getPreviewMeta(account.row, image) : account.imageCount + " ファイルを順番に保存";
+
+        var check = document.createElement("span");
+        check.className = "check-mark";
+        check.textContent = "✓";
+
+        text.appendChild(title);
+        text.appendChild(sub);
+        button.appendChild(thumb);
+        button.appendChild(text);
+        button.appendChild(check);
+        return button;
+      }
+
+      function createPreviewItem(image) {
+        var item = document.createElement("div");
+        item.className = "preview-item";
+
+        var img = document.createElement("img");
+        img.src = getPreviewUrl(selectedRow, image);
+        img.alt = image.label;
+
+        var label = document.createElement("div");
+        label.className = "preview-label";
+        label.textContent = image.label;
+
+        item.appendChild(img);
+        item.appendChild(label);
+        return item;
+      }
+
+      function saveSelectedImages() {
+        var account = getSelectedAccount();
+        if (!account || account.imageCount === 0 || isSaving) return;
+
+        isSaving = true;
+        updateSaveButton(account);
+
+        if (selectedMode === "all") {
+          setStatus(account.imageCount + " ファイルを保存しています...", false);
+          google.script.run
+            .withSuccessHandler(function(payloads) {
+              runSequentialDownloads(payloads || [], 0);
+            })
+            .withFailureHandler(function(error) {
+              isSaving = false;
+              updateSaveButton(account);
+              setStatus(error && error.message ? error.message : String(error), true);
+            })
+            .getAccountImagePayloads(account.row);
+          return;
+        }
+
+        setStatus("画像を保存しています...", false);
+        google.script.run
+          .withSuccessHandler(function(payload) {
+            startDownload(payload);
+            isSaving = false;
+            updateSaveButton(account);
+            setStatus("保存処理を実行しました。保存が始まらない場合は、もう一度保存してください。", false);
+          })
+          .withFailureHandler(function(error) {
+            isSaving = false;
+            updateSaveButton(account);
+            setStatus(error && error.message ? error.message : String(error), true);
+          })
+          .getSingleImagePayload(account.row, selectedImageKey);
+      }
+
+      function runSequentialDownloads(payloads, index) {
+        var account = getSelectedAccount();
+        if (index >= payloads.length) {
+          isSaving = false;
+          updateSaveButton(account);
+          setStatus("保存処理を実行しました。止められた画像は対象を個別に選んで保存してください。", false);
+          return;
+        }
+
+        setStatus((index + 1) + " / " + payloads.length + " 件目を保存しています...", false);
+        startDownload(payloads[index]);
+        window.setTimeout(function() {
+          runSequentialDownloads(payloads, index + 1);
+        }, 650);
+      }
+
+      function startDownload(payload) {
+        var anchor = document.createElement("a");
+        anchor.href = payload.dataUrl;
+        anchor.download = payload.filename;
+        anchor.rel = "noopener";
+        anchor.style.display = "none";
+        document.body.appendChild(anchor);
+        anchor.click();
+        window.setTimeout(function() {
+          document.body.removeChild(anchor);
+        }, 0);
+      }
+
+      function updateSaveButton(account) {
+        openButton.disabled = isSaving || !account || account.imageCount === 0;
+        openButton.textContent = isSaving ? "保存中..." : "保存する";
+      }
+
+      function loadPreviewsForAccount(account) {
+        if (!account || !account.row || previewCache[account.row] || previewLoadingRows[account.row]) return;
+        previewLoadingRows[account.row] = true;
+
+        google.script.run
+          .withSuccessHandler(function(previews) {
+            var map = {};
+            (previews || []).forEach(function(preview) {
+              map[preview.imageKey] = preview;
+            });
+            previewCache[account.row] = map;
+            previewLoadingRows[account.row] = false;
+            if (selectedRow === account.row) {
+              renderDetail();
+            }
+          })
+          .withFailureHandler(function() {
+            previewLoadingRows[account.row] = false;
+          })
+          .getAccountImagePreviewPayloads(account.row);
+      }
+
+      function getPreviewUrl(row, image) {
+        var preview = previewCache[row] && previewCache[row][image.imageKey];
+        if (preview && preview.dataUrl) {
+          return preview.dataUrl;
+        }
+        if (preview && preview.error) {
+          return buildPlaceholderDataUrl("取得不可");
+        }
+        return buildPlaceholderDataUrl("読込中");
+      }
+
+      function getPreviewMeta(row, image) {
+        var preview = previewCache[row] && previewCache[row][image.imageKey];
+        if (preview && preview.filename) {
+          return preview.filename;
+        }
+        if (preview && preview.error) {
+          return "プレビューを取得できませんでした";
+        }
+        return "プレビュー取得中";
+      }
+
+      function buildPlaceholderDataUrl(text) {
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">' +
+          '<rect width="160" height="160" rx="12" fill="#eef3f8"/>' +
+          '<text x="80" y="83" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#667085">' +
+          escapeSvgText(text) +
+          '</text></svg>';
+        return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+      }
+
+      function escapeSvgText(text) {
+        return String(text || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function selectAccount(account) {
+        if (!account || account.imageCount === 0) return;
+        selectedRow = account.row;
+        selectedMode = "all";
+        selectedImageKey = account.images[0] ? account.images[0].imageKey : "";
+        if (isMobileView()) {
+          activeTab = "images";
+        }
+        renderAccounts();
+      }
+
+      function getSelectedAccount() {
+        for (var i = 0; i < filteredAccounts.length; i++) {
+          if (filteredAccounts[i].row === selectedRow) return filteredAccounts[i];
+        }
+        return null;
+      }
+
+      function findFirstAvailableAccount(accounts) {
+        for (var i = 0; i < accounts.length; i++) {
+          if (accounts[i].imageCount > 0) return accounts[i];
+        }
+        return accounts[0] || null;
+      }
+
+      function renderEmpty(message) {
+        detailTitle.textContent = "アカウントを選択";
+        detailMeta.textContent = "";
+        imageCountPill.textContent = "画像 0 件";
+        updateSaveButton(null);
+        targetList.innerHTML = "";
+        previewGrid.innerHTML = "";
+        targetList.appendChild(createEmptyBlock(message));
+        updateTabButtons();
+      }
+
+      function createEmptyBlock(message) {
+        var block = document.createElement("div");
+        block.className = "empty";
+        block.textContent = message;
+        return block;
+      }
+
+      function setStatus(message, isError) {
+        statusEl.className = isError ? "status error" : "status";
+        statusEl.textContent = message;
+      }
+
+      function setActiveTab(tab) {
+        activeTab = tab === "images" ? "images" : "accounts";
+        updateTabButtons();
+      }
+
+      function updateTabButtons() {
+        var hasAccount = !!getSelectedAccount();
+        if (activeTab === "images" && !hasAccount) {
+          activeTab = "accounts";
+        }
+        appShell.setAttribute("data-active-tab", activeTab);
+        accountTabButton.setAttribute("aria-selected", activeTab === "accounts" ? "true" : "false");
+        imagesTabButton.setAttribute("aria-selected", activeTab === "images" ? "true" : "false");
+        imagesTabButton.disabled = !hasAccount;
+      }
+
+      function isMobileView() {
+        return window.matchMedia && window.matchMedia("(max-width: 680px)").matches;
+      }
+
+      function closeView() {
+        if (window.google && google.script && google.script.host && google.script.host.close) {
+          google.script.host.close();
+          return;
+        }
+        window.close();
+      }
+    </script>
+  </body>
+</html>

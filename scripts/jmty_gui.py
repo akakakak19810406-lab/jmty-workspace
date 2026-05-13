@@ -1652,7 +1652,7 @@ def app_state(output_root: Path, templates_dir: Path) -> dict[str, Any]:
 
 
 def run_weekly_command(command: str, output_root: Path, templates_dir: Path, options: dict[str, Any]) -> list[str]:
-    if command not in {"prepare", "rotate-dry-run", "rotate-sheet", "sync-drive", "sync-sheet", "validate-output"}:
+    if command not in {"prepare", "rotate-dry-run", "rotate-sheet", "sync-drive", "sync-sheet", "validate-output", "validate-sheet-posts"}:
         raise ValueError(f"未対応のコマンドです: {command}")
     if not WEEKLY_SCRIPT.exists():
         raise FileNotFoundError(f"週次処理スクリプトが見つかりません: {WEEKLY_SCRIPT}")
@@ -1676,6 +1676,13 @@ def run_weekly_command(command: str, output_root: Path, templates_dir: Path, opt
         return args
     if command == "sync-sheet":
         return [*base, "sync-sheet"]
+    if command == "validate-sheet-posts":
+        args = [*base, "validate-sheet-posts"]
+        if options.get("repair", False):
+            args.append("--repair")
+        else:
+            args.append("--dry-run")
+        return args
     return [*base, command]
 
 
@@ -1695,7 +1702,7 @@ def start_job(command: str, output_root: Path, templates_dir: Path, options: dic
             check=False,
         )
         sheet_refresh_output = ""
-        if result.returncode == 0 and command in {"rotate-sheet", "sync-sheet"}:
+        if result.returncode == 0 and command in {"rotate-sheet", "sync-sheet", "validate-sheet-posts"}:
             try:
                 reload_sheet_state()
                 sheet_refresh_output = "\n\n[sheet-cache] 最新スプレッドシートを再読込しました"
@@ -3490,8 +3497,9 @@ WEEKLY_BULK_STEPS = [
     {"key": "rotate", "label": "地域ローテーション反映", "start": 2, "end": 14},
     {"key": "posts", "label": "投稿文一括AI再作成", "start": 14, "end": 42},
     {"key": "images", "label": "画像全員分生成", "start": 42, "end": 82},
-    {"key": "drive", "label": "Drive反映", "start": 82, "end": 91},
-    {"key": "sheet", "label": "スプレッドシート反映", "start": 91, "end": 98},
+    {"key": "drive", "label": "Drive反映", "start": 82, "end": 90},
+    {"key": "sheet", "label": "スプレッドシート反映", "start": 90, "end": 96},
+    {"key": "sheet_validate", "label": "投稿文整合性検証", "start": 96, "end": 100},
 ]
 
 
@@ -3581,7 +3589,7 @@ def run_weekly_bulk_command_step(
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"{command} exited with {result.returncode}")
-    if command in {"rotate-sheet", "sync-sheet"}:
+    if command in {"rotate-sheet", "sync-sheet", "validate-sheet-posts"}:
         reload_sheet_state()
 
 
@@ -3692,6 +3700,16 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path, *, 
 
         run_weekly_bulk_command_step(job_id, 4, "sync-sheet", output_root, templates_dir, {})
         finish_weekly_bulk_step(job_id, 4)
+
+        run_weekly_bulk_command_step(
+            job_id,
+            5,
+            "validate-sheet-posts",
+            output_root,
+            templates_dir,
+            {"repair": True},
+        )
+        finish_weekly_bulk_step(job_id, 5)
 
         update_job(
             job_id,
@@ -7582,6 +7600,7 @@ INDEX_HTML = r"""<!doctype html>
                   <button class="primary" id="generate-all-images" data-icon="auto_awesome">画像一括生成</button>
                   <button id="validate-all-images" data-icon="rule">画像一括検証</button>
                   <button class="blue" data-command="sync-drive" data-icon="cloud_upload">Driveへ反映</button>
+                  <button data-command="validate-sheet-posts" data-icon="fact_check">投稿文整合性検証</button>
                   <button class="primary" data-command="sync-sheet" data-icon="cloud_sync">スプレッドシートに反映</button>
                 </div>
               </div>
@@ -8005,6 +8024,7 @@ INDEX_HTML = r"""<!doctype html>
       "sync-drive": "Driveへ反映",
       "sync-sheet": "スプレッドシートに反映",
       "validate-output": "検証",
+      "validate-sheet-posts": "投稿文整合性検証",
       "gws auth login --full": "gws再認証",
       "image-generate": "Codex画像生成",
       "image-validate": "画像検証",
@@ -8015,10 +8035,11 @@ INDEX_HTML = r"""<!doctype html>
     };
     const commandConfirmations = {
       "rotate-sheet": "ローテーション結果をスプレッドシートに反映します。Google Sheets の地域割り振りを1つずつずらします。続行しますか？",
-      "weekly-bulk": "週次一括実行を開始します。地域と投稿文のローテーション反映、投稿文AI再作成、全員分の画像生成、Drive反映、スプレッドシート反映を順番に実行します。長時間かかります。続行しますか？",
-      "weekly-bulk-resume": "途中から再実行します。地域ローテーションと投稿文再作成はスキップし、生成済み画像を飛ばして未生成画像、Drive反映、スプレッドシート反映を実行します。続行しますか？",
+      "weekly-bulk": "週次一括実行を開始します。地域と投稿文のローテーション反映、投稿文AI再作成、全員分の画像生成、Drive反映、スプレッドシート反映、投稿文整合性検証を順番に実行します。長時間かかります。続行しますか？",
+      "weekly-bulk-resume": "途中から再実行します。地域ローテーションと投稿文再作成はスキップし、生成済み画像を飛ばして未生成画像、Drive反映、スプレッドシート反映、投稿文整合性検証を実行します。続行しますか？",
       "sync-drive": "Driveへ反映します。Google Drive のアカウント別フォルダへ画像・投稿文・プロンプトを送ります。スプレッドシートは更新しません。続行しますか？",
       "sync-sheet": "スプレッドシートに反映します。ローカル投稿文とDrive画像URLをGoogle Sheetsへ送ります。続行しますか？",
+      "validate-sheet-posts": "スプレッドシートの画像条件と投稿文を照合します。通常実行は修正対象一覧のみを出します。続行しますか？",
     };
     const weeklyBulkSteps = [
       { key: "rotate", label: "地域ローテーション" },
@@ -8026,6 +8047,7 @@ INDEX_HTML = r"""<!doctype html>
       { key: "images", label: "画像全員分生成" },
       { key: "drive", label: "Drive反映" },
       { key: "sheet", label: "スプレッドシート反映" },
+      { key: "sheet_validate", label: "投稿文整合性検証" },
     ];
 
     const $ = (id) => document.getElementById(id);

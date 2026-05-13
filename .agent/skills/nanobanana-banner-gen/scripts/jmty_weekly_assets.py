@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import ssl
 import sys
+import tempfile
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +51,7 @@ EXPECTED_IMAGE_FILENAMES = {
 
 FACTORY_OCR_HINTS = ("工場", "製造", "月収", "寮", "ライン", "高収入")
 REMOTE_OCR_HINTS = ("在宅", "リモート", "自宅", "PC", "文章", "ライター", "オンライン")
+SHEET_POST_VALIDATION_MIN_LENGTH = 140
 
 
 CTA_VARIANTS = [
@@ -979,6 +982,486 @@ def source_text_prefers_image(task_kind: str, image_path: Path, fallback_text: s
     return fallback_text
 
 
+def sheet_column_index(column: str) -> int:
+    result = 0
+    for char in column.strip().upper():
+        if not ("A" <= char <= "Z"):
+            raise ValueError(f"不正な列文字です: {column}")
+        result = result * 26 + (ord(char) - ord("A") + 1)
+    return result - 1
+
+
+def normalize_condition_text(value: str) -> str:
+    return unicodedata.normalize("NFKC", str(value or "")).strip()
+
+
+def compact_condition_text(value: str) -> str:
+    return re.sub(r"\s+", "", normalize_condition_text(value))
+
+
+def extract_salary_mentions(text: str) -> list[str]:
+    normalized = normalize_condition_text(text)
+    patterns = [
+        r"(月収\s*\d+(?:\.\d+)?\s*(?:〜|～|-|ー|－)\s*\d+(?:\.\d+)?\s*万円(?:目安|前後|以上|可)?)",
+        r"(月収\s*\d+(?:\.\d+)?\s*万円(?:目安|前後|以上|可)?)",
+        r"(月給\s*\d+(?:\.\d+)?\s*万円(?:目安|前後|以上|可)?)",
+        r"(時給\s*\d+(?:,\d{3})*(?:\.\d+)?\s*円(?:\s*(?:〜|～|-|ー|－)\s*\d+(?:,\d{3})*(?:\.\d+)?\s*円?)?)",
+        r"(年収\s*\d+(?:\.\d+)?\s*万円(?:目安|前後|以上|可)?)",
+    ]
+    found: list[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, normalized):
+            value = re.sub(r"\s+", "", match.group(1))
+            if value not in found:
+                found.append(value)
+    return found
+
+
+def first_salary_mention(text: str) -> str:
+    mentions = extract_salary_mentions(text)
+    return mentions[0] if mentions else ""
+
+
+def normalize_salary_for_compare(value: str) -> str:
+    text = compact_condition_text(value)
+    text = text.replace("〜", "～").replace("-", "～").replace("ー", "～").replace("－", "～")
+    text = re.sub(r"(目安|前後|可|程度)", "", text)
+    return text
+
+
+def salary_matches(expected: str, actual: str) -> bool:
+    expected_norm = normalize_salary_for_compare(expected)
+    actual_norm = normalize_salary_for_compare(actual)
+    if not expected_norm or not actual_norm:
+        return True
+    if expected_norm == actual_norm:
+        return True
+    expected_numbers = re.findall(r"\d+(?:\.\d+)?", expected_norm)
+    actual_numbers = re.findall(r"\d+(?:\.\d+)?", actual_norm)
+    expected_unit = re.sub(r"[\d.,～]+", "", expected_norm)
+    actual_unit = re.sub(r"[\d.,～]+", "", actual_norm)
+    return bool(expected_numbers) and expected_numbers == actual_numbers and expected_unit == actual_unit
+
+
+def quoted_copy_values(line: str) -> list[str]:
+    return [part.strip() for part in re.findall(r"「([^」]+)」", line) if part.strip()]
+
+
+def looks_like_role(value: str) -> bool:
+    text = compact_condition_text(value)
+    if not text or len(text) > 40:
+        return False
+    if re.search(r"(月収|月給|時給|年収|万円|円|応募|未経験|歓迎|OK|かんたん|安定|給与|勤務地)", text):
+        return False
+    return True
+
+
+def extract_role_candidates(text: str, task_kind: str) -> list[str]:
+    normalized = normalize_condition_text(text)
+    candidates: list[str] = []
+    line_patterns = [
+        r"職種(?:表記)?[:：]\s*([^\n\r]+)",
+        r"仕事内容[:：]\s*([^\n\r]+)",
+        r"今回の業務は、([^。\n\r]+?)を中心",
+        r"([^。\n\r]{2,40}?)の募集で、",
+        r"／([^｜|\n\r]{2,40})[｜|]",
+    ]
+    for pattern in line_patterns:
+        for match in re.finditer(pattern, normalized):
+            candidate = match.group(1).strip()
+            if looks_like_role(candidate) and candidate not in candidates:
+                candidates.append(candidate)
+
+    for line in normalized.splitlines():
+        if "Main copy" not in line:
+            continue
+        for candidate in quoted_copy_values(line):
+            if looks_like_role(candidate) and candidate not in candidates:
+                candidates.append(candidate)
+
+    fallback = extract_role_phrase(normalized, task_kind)
+    if fallback and looks_like_role(fallback) and fallback not in candidates:
+        candidates.append(fallback)
+    return candidates
+
+
+def first_role_candidate(text: str, task_kind: str) -> str:
+    candidates = extract_role_candidates(text, task_kind)
+    return candidates[0] if candidates else ""
+
+
+def normalize_role_for_compare(value: str) -> str:
+    text = compact_condition_text(value)
+    text = re.sub(r"[()（）【】「」『』/／・\-ー－|｜]", "", text)
+    text = re.sub(r"(スタッフ|作業員|担当|業務|補助)$", "", text)
+    return text
+
+
+def role_matches(expected: str, actual: str, task_kind: str) -> bool:
+    expected_norm = normalize_role_for_compare(expected)
+    actual_norm = normalize_role_for_compare(actual)
+    if not expected_norm or not actual_norm:
+        return True
+    if expected_norm == actual_norm or expected_norm in actual_norm or actual_norm in expected_norm:
+        return True
+    if task_kind == "factory":
+        keywords = ("検査", "品質", "組立", "ライン", "マシン", "オペ", "自動車", "食品", "半導体", "電子", "製造")
+    else:
+        keywords = ("文章", "リライト", "ライター", "事務", "データ入力", "SNS", "サポート", "営業", "デザイン", "動画", "AI")
+    expected_hits = {keyword for keyword in keywords if keyword in expected_norm}
+    actual_hits = {keyword for keyword in keywords if keyword in actual_norm}
+    return bool(expected_hits and actual_hits and expected_hits == actual_hits)
+
+
+def logical_post_kind(task_kind: str) -> str:
+    return "remote" if task_kind in {"remote1", "remote2"} else "factory"
+
+
+def classify_condition_kind(text: str) -> str:
+    normalized = compact_condition_text(text)
+    if not normalized:
+        return ""
+    if re.search(r"(種別|カテゴリ)[:：]?工場", normalized) or "工場求人画像として作る" in normalized:
+        return "factory"
+    if re.search(r"(種別|カテゴリ)[:：]?在宅", normalized) or "在宅求人画像として作る" in normalized:
+        return "remote"
+    factory_score = 0
+    remote_score = 0
+    for keyword in ("工場", "製造", "寮", "ライン", "組立", "検査", "品質", "マシン", "部品"):
+        if keyword in normalized:
+            factory_score += 1
+    for keyword in ("完全在宅", "在宅", "リモート", "自宅", "出勤不要", "PC", "オンライン", "チャット", "文章作成"):
+        if keyword in normalized:
+            remote_score += 1
+    if "完全在宅" in normalized or "出勤不要" in normalized:
+        remote_score += 2
+    if factory_score > remote_score:
+        return "factory"
+    if remote_score > factory_score:
+        return "remote"
+    return ""
+
+
+def extract_drive_file_id(value: str) -> str:
+    text = str(value or "")
+    patterns = [
+        r"[?&]id=([A-Za-z0-9_-]+)",
+        r"/d/([A-Za-z0-9_-]+)",
+        r"uc\?id=([A-Za-z0-9_-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def download_drive_image_for_ocr(file_id: str) -> Path | None:
+    if not file_id:
+        return None
+    cache_dir = Path(tempfile.gettempdir()) / "jmty-sheet-post-validation"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    destination = cache_dir / f"{file_id}.img"
+    if destination.exists() and destination.stat().st_size > 0:
+        return destination
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "jmty-weekly-assets/1.0"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = response.read(20 * 1024 * 1024)
+            content_type = response.headers.get("Content-Type", "")
+        if "html" in content_type.lower() or data.lstrip().startswith(b"<"):
+            return None
+        destination.write_bytes(data)
+        return destination
+    except (OSError, urllib.error.URLError):
+        return None
+
+
+def read_prompt_metadata_text(output_root: Path, task: dict) -> str:
+    parts: list[str] = []
+    prompt_relpath = str(task.get("prompt_relpath") or "")
+    if prompt_relpath:
+        prompt_path = output_root / prompt_relpath
+        if prompt_path.exists():
+            parts.append(prompt_path.read_text(encoding="utf-8"))
+    task_prompt = str(task.get("prompt_text") or "")
+    if task_prompt:
+        parts.append(task_prompt)
+    return "\n\n".join(parts)
+
+
+def extract_image_conditions(output_root: Path, task: dict, sheet_row: list[str], include_drive_ocr: bool = False) -> dict[str, str]:
+    task_kind = str(task.get("kind") or "")
+    sources: list[str] = []
+    texts_by_source: list[tuple[str, str]] = []
+
+    image_relpath = str(task.get("image_relpath") or "")
+    if image_relpath:
+        image_path = output_root / image_relpath
+        if image_path.exists():
+            text = ocr_text(image_path)
+            if text:
+                texts_by_source.append(("local_ocr", text))
+                sources.append("local_ocr")
+
+    image_index = sheet_column_index(str(task.get("image_col") or "A"))
+    image_formula = cell_value(sheet_row, image_index)
+    drive_file_id = extract_drive_file_id(image_formula)
+    if include_drive_ocr:
+        drive_image_path = download_drive_image_for_ocr(drive_file_id)
+        if drive_image_path:
+            text = ocr_text(drive_image_path)
+            if text:
+                texts_by_source.append(("drive_ocr", text))
+                sources.append("drive_ocr")
+
+    prompt_metadata = read_prompt_metadata_text(output_root, task)
+    if prompt_metadata:
+        texts_by_source.append(("prompt_metadata", prompt_metadata))
+        sources.append("prompt_metadata")
+
+    salary = ""
+    role = ""
+    kind = ""
+    for _, text in texts_by_source:
+        if not salary:
+            salary = first_salary_mention(text)
+        if not role:
+            role = first_role_candidate(text, task_kind)
+        if not kind:
+            kind = classify_condition_kind(text)
+
+    return {
+        "salary": salary,
+        "role": role,
+        "kind": kind,
+        "source": ",".join(dict.fromkeys(sources)),
+        "drive_file_id": drive_file_id,
+    }
+
+
+def extract_post_conditions(post_text: str, task_kind: str) -> dict[str, str]:
+    return {
+        "salary": first_salary_mention(post_text),
+        "role": first_role_candidate(post_text, task_kind),
+        "kind": classify_condition_kind(post_text),
+    }
+
+
+def has_location_condition(post_text: str, task_kind: str, region: str) -> bool:
+    text = compact_condition_text(post_text)
+    if logical_post_kind(task_kind) == "remote":
+        return "完全在宅" in text or "全国どこからでも" in text or "出勤不要" in text
+    region_text = compact_condition_text(region)
+    return bool(region_text and region_text in text) or "勤務地" in text
+
+
+def validate_sheet_post_quality(task: dict, sheet_post_text_value: str, post_conditions: dict[str, str], effective_task_kind: str = "") -> list[str]:
+    issues: list[str] = []
+    text = strip_markdown_markers(sheet_post_text_value)
+    compact = compact_condition_text(text)
+    task_kind = effective_task_kind or str(task.get("kind") or "")
+    if len(compact) < SHEET_POST_VALIDATION_MIN_LENGTH:
+        issues.append("投稿文が短すぎます")
+    if re.search(r"(仮文|仮置き|TODO|TBD|テスト|ダミー|サンプル|Lorem)", text, flags=re.IGNORECASE):
+        issues.append("仮文またはテスト文の可能性があります")
+    if not post_conditions.get("role"):
+        issues.append("職種が読み取れません")
+    if not post_conditions.get("salary"):
+        issues.append("給与が読み取れません")
+    if not has_location_condition(text, task_kind, str(task.get("region") or "")):
+        issues.append("勤務地または在宅条件が不足しています")
+    if "応募" not in compact and "LINE" not in text.upper():
+        issues.append("応募導線が不足しています")
+    if "応募条件" not in text and "未経験" not in text and "経験" not in text:
+        issues.append("応募条件が不足しています")
+    post_kind = post_conditions.get("kind") or ""
+    if task_kind == "factory" and post_kind == "remote":
+        issues.append("工場投稿文に在宅系の文言が強く出ています")
+    if task_kind in {"remote1", "remote2"} and post_kind == "factory":
+        issues.append("在宅投稿文に工場系の文言が強く出ています")
+    if task_kind in {"remote1", "remote2"} and "完全在宅" not in text:
+        issues.append("在宅投稿文に完全在宅の表記がありません")
+    return issues
+
+
+def repair_kind_for_image(task_kind: str, image_kind: str) -> str:
+    if image_kind == "factory":
+        return "factory"
+    if image_kind == "remote":
+        return task_kind if task_kind in {"remote1", "remote2"} else "remote1"
+    return task_kind
+
+
+def build_repaired_sheet_post(task: dict, image_conditions: dict[str, str], current_post: str) -> str:
+    task_kind = str(task.get("kind") or "")
+    repair_kind = repair_kind_for_image(task_kind, image_conditions.get("kind", ""))
+    role = image_conditions.get("role") or first_role_candidate(current_post, repair_kind)
+    salary = image_conditions.get("salary") or first_salary_mention(current_post) or extract_salary_text(current_post, repair_kind)
+    source_lines = [
+        f"職種: {role}",
+        f"給与: {salary}",
+        "種別: 工場求人" if repair_kind == "factory" else "種別: 完全在宅求人",
+        current_post,
+    ]
+    variation = choose_post_variation(str(task.get("account_no") or ""), int(task.get("row_idx") or 0), repair_kind)
+    post_text, _ = build_post_text(
+        repair_kind,
+        str(task.get("region") or ""),
+        "\n".join(line for line in source_lines if line.strip()),
+        str(task.get("account_name") or ""),
+        variation,
+        salary_override=salary,
+        role_override=role,
+    )
+    return strip_markdown_markers(post_text)
+
+
+def collect_sheet_post_validation(
+    output_root: Path,
+    rows: list[list[str]],
+    tasks: list[dict],
+    include_drive_ocr: bool = False,
+) -> list[dict]:
+    findings: list[dict] = []
+    for task in tasks:
+        validate_manifest_task(task)
+        row_idx = int(task["row_idx"])
+        sheet_row_index = row_idx - 7
+        if sheet_row_index < 0 or sheet_row_index >= len(rows):
+            findings.append(
+                {
+                    "account_name": task.get("account_name", ""),
+                    "kind": task.get("kind", ""),
+                    "label_ja": task.get("label_ja", ""),
+                    "row_idx": row_idx,
+                    "cell": f"{task.get('post_col', '?')}{row_idx}",
+                    "issues": ["スプレッドシート行が取得できません"],
+                    "image_conditions": {},
+                    "post_conditions": {},
+                    "current_post": "",
+                }
+            )
+            continue
+
+        row = rows[sheet_row_index]
+        post_index = sheet_column_index(str(task.get("post_col") or "A"))
+        current_post = cell_value(row, post_index)
+        image_conditions = extract_image_conditions(output_root, task, row, include_drive_ocr=include_drive_ocr)
+        post_conditions = extract_post_conditions(current_post, str(task.get("kind") or ""))
+
+        issues: list[str] = []
+        image_salary = image_conditions.get("salary", "")
+        post_salary = post_conditions.get("salary", "")
+        if image_salary and post_salary and not salary_matches(image_salary, post_salary):
+            issues.append(f"画像の給与 `{image_salary}` と投稿文の給与 `{post_salary}` が違います")
+        if image_salary and not post_salary:
+            issues.append(f"画像の給与 `{image_salary}` が投稿文から読み取れません")
+
+        image_role = image_conditions.get("role", "")
+        post_role = post_conditions.get("role", "")
+        if image_role and post_role and not role_matches(image_role, post_role, str(task.get("kind") or "")):
+            issues.append(f"画像の職種 `{image_role}` と投稿文の職種 `{post_role}` が違います")
+        if image_role and not post_role:
+            issues.append(f"画像の職種 `{image_role}` が投稿文から読み取れません")
+
+        image_kind = image_conditions.get("kind", "")
+        post_kind = post_conditions.get("kind", "")
+        if image_kind and post_kind and image_kind != post_kind:
+            issues.append(f"画像種別 `{image_kind}` と投稿文種別 `{post_kind}` が違います")
+        quality_kind = repair_kind_for_image(str(task.get("kind") or ""), image_kind) if image_kind else str(task.get("kind") or "")
+        issues.extend(validate_sheet_post_quality(task, current_post, post_conditions, effective_task_kind=quality_kind))
+        if issues:
+            findings.append(
+                {
+                    "account_name": task.get("account_name", ""),
+                    "kind": task.get("kind", ""),
+                    "label_ja": task.get("label_ja", ""),
+                    "row_idx": row_idx,
+                    "cell": f"{task.get('post_col', '?')}{row_idx}",
+                    "issues": list(dict.fromkeys(issues)),
+                    "image_conditions": image_conditions,
+                    "post_conditions": post_conditions,
+                    "current_post": current_post,
+                }
+            )
+    return findings
+
+
+def validate_sheet_posts(output_root: Path, repair: bool, include_drive_ocr: bool = False) -> None:
+    tasks = read_tasks(output_root)
+    rows = read_sheet_rows()
+    findings = collect_sheet_post_validation(output_root, rows, tasks, include_drive_ocr=include_drive_ocr)
+    updates: list[dict] = []
+    update_items: list[dict] = []
+
+    if repair:
+        for finding in findings:
+            task = next(
+                (
+                    item
+                    for item in tasks
+                    if int(item.get("row_idx") or 0) == int(finding["row_idx"])
+                    and str(item.get("kind") or "") == str(finding["kind"])
+                ),
+                None,
+            )
+            if not task:
+                continue
+            repaired_post = build_repaired_sheet_post(task, finding["image_conditions"], finding["current_post"])
+            current_value = strip_markdown_markers(str(finding.get("current_post") or ""))
+            if normalized_condition_text(repaired_post) == normalized_condition_text(current_value):
+                continue
+            range_name = f"{SHEET_NAME}!{finding['cell']}"
+            updates.append({"range": range_name, "values": [[repaired_post]]})
+            update_items.append(
+                {
+                    "account_name": finding["account_name"],
+                    "label_ja": finding["label_ja"],
+                    "kind": finding["kind"],
+                    "cell": finding["cell"],
+                    "issues": finding["issues"],
+                    "image_conditions": finding["image_conditions"],
+                }
+            )
+        if updates:
+            batch_update_sheet(updates)
+        recheck_rows = read_sheet_rows()
+        recheck_findings = collect_sheet_post_validation(output_root, recheck_rows, tasks, include_drive_ocr=include_drive_ocr)
+    else:
+        recheck_findings = []
+
+    print(
+        json.dumps(
+            {
+                "output_root": str(output_root),
+                "dry_run": not repair,
+                "checked": len(tasks),
+                "issue_count": len(findings),
+                "planned_or_updated_cells": [item["cell"] for item in update_items] if repair else [item["cell"] for item in findings],
+                "updated_cells": len(updates) if repair else 0,
+                "remaining_issue_count": len(recheck_findings) if repair else None,
+                "updates": update_items,
+                "findings": [
+                    {
+                        "account_name": item["account_name"],
+                        "label_ja": item["label_ja"],
+                        "kind": item["kind"],
+                        "cell": item["cell"],
+                        "issues": item["issues"],
+                        "image_conditions": item["image_conditions"],
+                        "post_conditions": item["post_conditions"],
+                    }
+                    for item in findings
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def render_prompt_document(task: dict | Task, image_path: Path, post_text: str, prompt_text: str) -> str:
     account_name = task["account_name"] if isinstance(task, dict) else task.account_name
     row_idx = task["row_idx"] if isinstance(task, dict) else task.row_idx
@@ -1057,9 +1540,11 @@ def build_post_text(
     source_text: str,
     account_name: str,
     variation: tuple[str, str] | None = None,
+    salary_override: str = "",
+    role_override: str = "",
 ) -> tuple[str, str]:
-    salary_text = extract_salary_text(source_text, task_type)
-    role_phrase = extract_role_phrase(source_text, task_type)
+    salary_text = salary_override.strip() or extract_salary_text(source_text, task_type)
+    role_phrase = role_override.strip() or extract_role_phrase(source_text, task_type)
     region_text = clean_display_text(region)
     variation_name, variation_direction = variation or ("標準", "案件情報に沿って自然に書く。")
 
@@ -1891,6 +2376,23 @@ def main() -> int:
 
     subparsers.add_parser("validate-output")
 
+    sheet_validate_parser = subparsers.add_parser("validate-sheet-posts")
+    sheet_validate_parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="不一致または品質問題がある投稿文セルだけを更新し、再取得して確認する",
+    )
+    sheet_validate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="更新せず、修正対象候補だけを出力する（--repair 未指定時の既定動作）",
+    )
+    sheet_validate_parser.add_argument(
+        "--drive-ocr",
+        action="store_true",
+        help="シート画像セルのDrive画像も一時取得してOCRする（通常はローカル画像とプロンプトメタデータを使う）",
+    )
+
     notify_parser = subparsers.add_parser("notify-improvement")
     notify_parser.add_argument("--title", required=True)
     notify_parser.add_argument("--summary", required=True)
@@ -1911,6 +2413,12 @@ def main() -> int:
             sync_sheet(output_root)
         elif args.command == "validate-output":
             validate_output(output_root)
+        elif args.command == "validate-sheet-posts":
+            validate_sheet_posts(
+                output_root,
+                repair=bool(args.repair and not args.dry_run),
+                include_drive_ocr=bool(args.drive_ocr),
+            )
         elif args.command == "notify-improvement":
             lines = [
                 "【ジモティ週次処理 改善メモ】",

@@ -1,0 +1,708 @@
+<!--
+  このHTMLは、画像セルリンクや選択モーダルから開く確認画面です。
+  アカウント画像をプレビューし、単体または全画像を個別ファイルとして順番に保存します。
+  ブラウザが連続保存を止めた場合に備えて、各画像の手動保存ボタンも表示します。
+-->
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #ffffff;
+        --surface-muted: #f6f8fb;
+        --surface-strong: #eef3f8;
+        --line: #d6dde8;
+        --line-strong: #b8c4d4;
+        --text: #17202c;
+        --muted: #667085;
+        --primary: #2563eb;
+        --primary-strong: #1d4ed8;
+        --primary-soft: #eaf1ff;
+        --error: #b42318;
+        --success: #087443;
+        font-family: Arial, "Hiragino Sans", "Yu Gothic", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--text);
+        background: var(--surface-muted);
+        font-size: 15px;
+        line-height: 1.55;
+      }
+
+      button {
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        padding: 10px 14px;
+        transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--line-strong);
+        background: var(--surface-muted);
+      }
+
+      button:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      button:focus {
+        outline: 3px solid rgba(37, 99, 235, 0.22);
+        outline-offset: 2px;
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.48;
+      }
+
+      .shell {
+        min-height: 100vh;
+        padding: 18px;
+      }
+
+      .panel {
+        display: grid;
+        grid-template-rows: auto auto auto 1fr;
+        max-width: 860px;
+        min-height: calc(100vh - 36px);
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: 0 18px 46px rgba(20, 33, 61, 0.12);
+      }
+
+      .header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 16px;
+        align-items: start;
+        padding: 20px 22px 16px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.28;
+        letter-spacing: 0;
+      }
+
+      .meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 4px 10px;
+      }
+
+      .pill.active {
+        border-color: #9bb8ff;
+        background: var(--primary-soft);
+        color: var(--primary-strong);
+      }
+
+      .close-button {
+        min-width: 44px;
+        padding: 8px 12px;
+      }
+
+      .status-area {
+        display: grid;
+        gap: 10px;
+        padding: 14px 22px 0;
+      }
+
+      .status {
+        min-height: 24px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .status.error {
+        color: var(--error);
+        font-weight: 700;
+      }
+
+      .status.success {
+        color: var(--success);
+        font-weight: 700;
+      }
+
+      .progress {
+        width: 100%;
+        height: 6px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--surface-strong);
+      }
+
+      .progress-fill {
+        width: 0%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--primary);
+        transition: width 180ms ease;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 16px 22px;
+      }
+
+      .primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #ffffff;
+        font-weight: 700;
+      }
+
+      .primary:hover:not(:disabled) {
+        border-color: var(--primary-strong);
+        background: var(--primary-strong);
+      }
+
+      .content {
+        min-height: 0;
+        overflow: auto;
+        padding: 0 22px 22px;
+      }
+
+      .image-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .image-card {
+        display: grid;
+        grid-template-columns: 112px 1fr;
+        gap: 14px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        padding: 12px;
+      }
+
+      .image-card.selected {
+        border-color: var(--primary);
+        background: var(--primary-soft);
+        box-shadow: 0 0 0 1px var(--primary) inset;
+      }
+
+      .thumb {
+        width: 112px;
+        height: 112px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-muted);
+        object-fit: contain;
+      }
+
+      .image-body {
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .image-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .image-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1.35;
+      }
+
+      .selected-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        border-radius: 999px;
+        background: var(--primary);
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 800;
+        padding: 3px 8px;
+        white-space: nowrap;
+      }
+
+      .image-meta {
+        overflow-wrap: anywhere;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .image-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .empty {
+        display: grid;
+        place-items: center;
+        min-height: 220px;
+        border: 1px dashed var(--line-strong);
+        border-radius: 10px;
+        color: var(--muted);
+        text-align: center;
+        padding: 22px;
+      }
+
+      @media (max-width: 620px) {
+        body {
+          font-size: 16px;
+        }
+
+        .shell {
+          min-height: 100vh;
+          padding: 0;
+        }
+
+        .panel {
+          min-height: 100vh;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+
+        .header,
+        .status-area,
+        .actions,
+        .content {
+          padding-right: 14px;
+          padding-left: 14px;
+        }
+
+        .header {
+          grid-template-columns: 1fr;
+        }
+
+        .close-button {
+          justify-self: stretch;
+        }
+
+        .actions {
+          display: grid;
+        }
+
+        .actions button,
+        .image-actions button {
+          width: 100%;
+        }
+
+        .image-card {
+          grid-template-columns: 82px 1fr;
+          gap: 10px;
+          padding: 10px;
+        }
+
+        .thumb {
+          width: 82px;
+          height: 82px;
+        }
+
+        .image-head,
+        .image-actions {
+          display: grid;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        button,
+        .progress-fill {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <main class="panel">
+        <header class="header">
+          <div>
+            <h1 id="title">画像ダウンロード</h1>
+            <div id="accountMeta" class="meta-row" aria-live="polite"></div>
+          </div>
+          <button id="closeButton" class="close-button" type="button">閉じる</button>
+        </header>
+
+        <div class="status-area">
+          <div id="status" class="status" aria-live="polite">読み込み中...</div>
+          <div class="progress" aria-hidden="true">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="singleButton" class="primary" type="button" disabled>この画像をダウンロード</button>
+          <button id="allButton" type="button" disabled>このアカウントの画像を全部ダウンロード</button>
+        </div>
+
+        <section class="content" aria-label="画像一覧">
+          <div id="imageList" class="image-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      var downloadContext = <?!= contextJson ?>;
+      var model = null;
+      var payloadCache = {};
+      var accountMetaEl = document.getElementById("accountMeta");
+      var allButton = document.getElementById("allButton");
+      var closeButton = document.getElementById("closeButton");
+      var imageListEl = document.getElementById("imageList");
+      var progressFill = document.getElementById("progressFill");
+      var singleButton = document.getElementById("singleButton");
+      var statusEl = document.getElementById("status");
+      var titleEl = document.getElementById("title");
+
+      singleButton.addEventListener("click", function() {
+        if (model && model.selectedImageKey) {
+          downloadSingle(model.selectedImageKey);
+        }
+      });
+
+      allButton.addEventListener("click", function() {
+        if (model) {
+          downloadAll();
+        }
+      });
+
+      closeButton.addEventListener("click", closeView);
+
+      google.script.run
+        .withSuccessHandler(function(result) {
+          model = result;
+          renderModel();
+          loadPreviewPayloads();
+          if (model.mode === "all") {
+            setStatus("内容を確認して、全部ダウンロードを押してください。", false);
+          } else {
+            setStatus("内容を確認して、ダウンロードを押してください。", false);
+          }
+        })
+        .withFailureHandler(showError)
+        .getDownloadModel(downloadContext);
+
+      function renderModel() {
+        titleEl.textContent = model.accountLabel || "画像ダウンロード";
+        renderMeta();
+        renderActions();
+        renderImages();
+      }
+
+      function renderMeta() {
+        accountMetaEl.innerHTML = "";
+        accountMetaEl.appendChild(createPill("行 " + model.row, false));
+        accountMetaEl.appendChild(createPill("画像 " + model.images.length + " 件", true));
+        if (model.mode === "all") {
+          accountMetaEl.appendChild(createPill("全部保存", false));
+        }
+      }
+
+      function renderActions() {
+        var selectedImage = getSelectedImage();
+        singleButton.disabled = !model.selectedImageKey;
+        allButton.disabled = model.images.length === 0;
+        singleButton.textContent = selectedImage ? selectedImage.label + " をダウンロード" : "この画像をダウンロード";
+        singleButton.className = model.mode === "single" ? "primary" : "";
+        allButton.className = model.mode === "all" ? "primary" : "";
+      }
+
+      function renderImages() {
+        imageListEl.innerHTML = "";
+
+        if (!model.images.length) {
+          var empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "ダウンロードできる画像がありません。";
+          imageListEl.appendChild(empty);
+          return;
+        }
+
+        model.images.forEach(function(image) {
+          var isSelected = image.imageKey === model.selectedImageKey;
+          var card = document.createElement("article");
+          card.className = "image-card" + (isSelected ? " selected" : "");
+
+          var img = document.createElement("img");
+          img.className = "thumb";
+          img.src = getPreviewUrl(image);
+          img.alt = image.label;
+
+          var body = document.createElement("div");
+          body.className = "image-body";
+
+          var head = document.createElement("div");
+          head.className = "image-head";
+
+          var name = document.createElement("p");
+          name.className = "image-title";
+          name.textContent = image.label;
+          head.appendChild(name);
+
+          if (isSelected) {
+            var badge = document.createElement("span");
+            badge.className = "selected-badge";
+            badge.textContent = "選択中";
+            head.appendChild(badge);
+          }
+
+          var meta = document.createElement("div");
+          meta.className = "image-meta";
+          meta.textContent = image.filename || image.url;
+
+          var actions = document.createElement("div");
+          actions.className = "image-actions";
+
+          var selectButton = document.createElement("button");
+          selectButton.type = "button";
+          selectButton.textContent = isSelected ? "選択中" : "この画像を選択";
+          selectButton.disabled = isSelected;
+          selectButton.addEventListener("click", function() {
+            model.selectedImageKey = image.imageKey;
+            model.mode = "single";
+            renderModel();
+            setStatus(image.label + " を選択しました。", false);
+          });
+
+          var saveButton = document.createElement("button");
+          saveButton.type = "button";
+          saveButton.textContent = "この画像を保存";
+          saveButton.addEventListener("click", function() {
+            model.selectedImageKey = image.imageKey;
+            model.mode = "single";
+            renderModel();
+            downloadSingle(image.imageKey);
+          });
+
+          actions.appendChild(selectButton);
+          actions.appendChild(saveButton);
+          body.appendChild(head);
+          body.appendChild(meta);
+          body.appendChild(actions);
+          card.appendChild(img);
+          card.appendChild(body);
+          imageListEl.appendChild(card);
+        });
+      }
+
+      function downloadSingle(imageKey) {
+        setBusy(true);
+        setProgress(0);
+        setStatus("画像データを取得しています...", false);
+
+        if (payloadCache[imageKey]) {
+          startDownload(payloadCache[imageKey]);
+          setProgress(100);
+          setStatus("保存処理を実行しました。保存が始まらない場合は個別ボタンを押してください。", true);
+          setBusy(false);
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function(payload) {
+            payloadCache[imageKey] = payload;
+            startDownload(payload);
+            setProgress(100);
+            setStatus("保存処理を実行しました。保存が始まらない場合は個別ボタンを押してください。", true);
+            setBusy(false);
+          })
+          .withFailureHandler(function(error) {
+            setBusy(false);
+            showError(error);
+          })
+          .getSingleImagePayload(model.row, imageKey);
+      }
+
+      function loadPreviewPayloads() {
+        if (!model || !model.images.length) return;
+        setStatus("プレビュー画像を取得しています...", false);
+
+        google.script.run
+          .withSuccessHandler(function(payloads) {
+            (payloads || []).forEach(function(payload) {
+              if (payload && payload.imageKey && payload.dataUrl) {
+                payloadCache[payload.imageKey] = payload;
+              }
+            });
+            renderImages();
+            if (model.mode === "all") {
+              setStatus("内容を確認して、全部ダウンロードを押してください。", false);
+            } else {
+              setStatus("内容を確認して、ダウンロードを押してください。", false);
+            }
+          })
+          .withFailureHandler(function() {
+            setStatus("プレビューを取得できませんでした。保存ボタンから画像データを取得します。", false);
+          })
+          .getAccountImagePreviewPayloads(model.row);
+      }
+
+      function getPreviewUrl(image) {
+        var payload = payloadCache[image.imageKey];
+        if (payload && payload.dataUrl) {
+          return payload.dataUrl;
+        }
+        return buildPlaceholderDataUrl("読込中");
+      }
+
+      function buildPlaceholderDataUrl(text) {
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">' +
+          '<rect width="180" height="180" rx="12" fill="#eef3f8"/>' +
+          '<text x="90" y="93" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#667085">' +
+          escapeSvgText(text) +
+          '</text></svg>';
+        return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+      }
+
+      function escapeSvgText(text) {
+        return String(text || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function downloadAll() {
+        if (!window.confirm(model.accountLabel + " の画像 " + model.images.length + " 件を1枚ずつ保存します。")) {
+          return;
+        }
+
+        model.mode = "all";
+        renderActions();
+        setBusy(true);
+        setProgress(0);
+        setStatus("画像データをまとめて取得しています...", false);
+
+        google.script.run
+          .withSuccessHandler(function(payloads) {
+            payloads.forEach(function(payload) {
+              payloadCache[payload.imageKey] = payload;
+            });
+            runSequentialDownloads(payloads, 0);
+          })
+          .withFailureHandler(function(error) {
+            setBusy(false);
+            showError(error);
+          })
+          .getAccountImagePayloads(model.row);
+      }
+
+      function runSequentialDownloads(payloads, index) {
+        if (index >= payloads.length) {
+          setProgress(100);
+          setStatus("保存処理を実行しました。止められた画像は個別ボタンから保存してください。", true);
+          setBusy(false);
+          return;
+        }
+
+        var percent = Math.round((index / payloads.length) * 100);
+        setProgress(percent);
+        setStatus((index + 1) + " / " + payloads.length + " 件目を保存しています...", false);
+        startDownload(payloads[index]);
+        window.setTimeout(function() {
+          runSequentialDownloads(payloads, index + 1);
+        }, 650);
+      }
+
+      function startDownload(payload) {
+        var anchor = document.createElement("a");
+        anchor.href = payload.dataUrl;
+        anchor.download = payload.filename;
+        anchor.rel = "noopener";
+        anchor.style.display = "none";
+        document.body.appendChild(anchor);
+        anchor.click();
+        window.setTimeout(function() {
+          document.body.removeChild(anchor);
+        }, 0);
+      }
+
+      function setBusy(isBusy) {
+        singleButton.disabled = isBusy || !model || !model.selectedImageKey;
+        allButton.disabled = isBusy || !model || model.images.length === 0;
+      }
+
+      function setProgress(percent) {
+        progressFill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+      }
+
+      function setStatus(message, isSuccess) {
+        statusEl.className = isSuccess ? "status success" : "status";
+        statusEl.textContent = message;
+      }
+
+      function showError(error) {
+        statusEl.className = "status error";
+        statusEl.textContent = error && error.message ? error.message : String(error);
+        setProgress(0);
+        setBusy(false);
+      }
+
+      function closeView() {
+        if (window.google && google.script && google.script.host && google.script.host.close) {
+          google.script.host.close();
+          return;
+        }
+        window.close();
+      }
+
+      function getSelectedImage() {
+        if (!model) return null;
+        for (var i = 0; i < model.images.length; i++) {
+          if (model.images[i].imageKey === model.selectedImageKey) {
+            return model.images[i];
+          }
+        }
+        return null;
+      }
+
+      function createPill(text, isActive) {
+        var pill = document.createElement("span");
+        pill.className = isActive ? "pill active" : "pill";
+        pill.textContent = text;
+        return pill;
+      }
+    </script>
+  </body>
+</html>
