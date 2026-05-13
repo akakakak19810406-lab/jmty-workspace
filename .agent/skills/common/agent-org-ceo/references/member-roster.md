@@ -5,8 +5,8 @@
 - 主な読み物: `skill-finder`、`operating-model.md`、`member-roster.md`
 
 ## Ops Manager
-- 役割: Git、セットアップ、repo 整理、秘密情報、コマンド同期
-- 主担当スキル: `git-workflow` / `jmty-setup` / `agent-org-ceo` / `skill-finder`
+- 役割: Git、GitHub Task Board、セットアップ、repo 整理、秘密情報、コマンド同期
+- 主担当スキル: `git-workflow` / `github-task-board` / `jmty-setup` / `agent-org-ceo` / `skill-finder`
 
 ## Writing Manager
 - 役割: ジモティ投稿文の作成、見出し、本文、テンプレ差分の確認

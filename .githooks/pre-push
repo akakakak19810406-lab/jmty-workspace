@@ -5,4 +5,4 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-python "$repo_root/.agent/skills/common/scripts/jmty_runtime.py" git-lfs-pre-push-guard --remote-name "${1:-origin}"
+python3 "$repo_root/.agent/skills/common/scripts/jmty_runtime.py" git-lfs-pre-push-guard --remote-name "${1:-origin}"
