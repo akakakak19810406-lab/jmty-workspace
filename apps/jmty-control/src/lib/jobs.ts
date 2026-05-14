@@ -18,6 +18,7 @@ export const JOB_TYPES = [
   "sync_all_dirty_posts_to_sheet",
   "rewrite_post_with_style",
   "rewrite_all_posts_with_style",
+  "rewrite_failed_validation_posts",
   "save_image_prompt",
   "cancel_image",
   "approve_image",

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import mimetypes
@@ -47,6 +48,15 @@ CODEX_VALIDATION_TIMEOUT_SECONDS = int(os.environ.get("JMTY_CODEX_VALIDATION_TIM
 CODEX_REWRITE_TIMEOUT_SECONDS = int(os.environ.get("JMTY_CODEX_REWRITE_TIMEOUT_SECONDS", "420"))
 CODEX_POST_GENERATION_TIMEOUT_SECONDS = int(os.environ.get("JMTY_CODEX_POST_GENERATION_TIMEOUT_SECONDS", "900"))
 POST_GENERATION_BATCH_SIZE = int(os.environ.get("JMTY_POST_GENERATION_BATCH_SIZE", "5"))
+IMAGE_VALIDATION_CONCURRENCY = max(1, int(os.environ.get("JMTY_IMAGE_VALIDATION_CONCURRENCY", "4")))
+WEEKLY_ACCOUNT_PARALLELISM = max(1, int(os.environ.get("JMTY_WEEKLY_ACCOUNT_PARALLELISM", "2")))
+VALIDATION_FAILED_POST_SCOPE = "validation_failed"
+VALIDATION_FAILED_STATUSES = {"suspect", "error"}
+GITHUB_PROJECT_OWNER = os.environ.get("JMTY_GITHUB_PROJECT_OWNER", "akakakak19810406-lab")
+GITHUB_PROJECT_NUMBER = os.environ.get("JMTY_GITHUB_PROJECT_NUMBER", "1")
+GITHUB_PROJECT_ITEM_LIMIT = max(1, int(os.environ.get("JMTY_GITHUB_PROJECT_ITEM_LIMIT", "30")))
+GITHUB_PROJECT_CACHE_SECONDS = max(10, int(os.environ.get("JMTY_GITHUB_PROJECT_CACHE_SECONDS", "120")))
+GITHUB_PROJECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("JMTY_GITHUB_PROJECT_TIMEOUT_SECONDS", "8")))
 IMAGE_RULES_PATH = ROOT / "inputs/jmty_image_generation_rules.json"
 LEGACY_IMAGE_RULES_PATH = GUI_ROOT / "image_rules.json"
 DEFAULT_COMMON_IMAGE_RULES = """- 画像上に「クリックして」「ボタンで」「LINEで」などの強い行動誘導文言（行動ボタン寄りのCTA）を主訴として置かない。
@@ -323,12 +333,20 @@ class Job:
     auth_url: str = ""
     auth_url_opened: bool = False
     step_key: str = ""
+    worker_total: int = 0
+    worker_running: int = 0
+    worker_done: int = 0
+    worker_failed: int = 0
+    worker_items: list[dict[str, Any]] = field(default_factory=list)
 
 
 jobs: dict[str, Job] = {}
 jobs_lock = threading.Lock()
+image_validation_file_lock = threading.Lock()
 gws_auth_cache: dict[str, Any] = {"checked_at": 0.0, "state": None}
 gws_auth_cache_lock = threading.Lock()
+task_board_cache: dict[str, Any] = {"checked_at": 0.0, "state": None}
+task_board_cache_lock = threading.Lock()
 GWS_AUTH_CACHE_SECONDS = 20
 GWS_AUTH_TIMEOUT_SECONDS = 15
 
@@ -353,6 +371,16 @@ def append_job_output(job_id: str, text: str, stderr: bool = False) -> None:
             return
         current = getattr(job, attr)
         setattr(job, attr, (current + text)[-20000:])
+
+
+def clone_worker_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cloned: list[dict[str, Any]] = []
+    for item in items:
+        copy = dict(item)
+        if isinstance(item.get("targets"), list):
+            copy["targets"] = [dict(target) for target in item["targets"]]
+        cloned.append(copy)
+    return cloned
 
 
 def now_stamp() -> str:
@@ -1179,6 +1207,71 @@ def generated_preview_path_for_template(templates_dir: Path, template_path: Path
     return templates_dir / "_previews" / f"{template_path.stem}.png"
 
 
+def template_preview_path_for_ext(templates_dir: Path, template_path: Path, ext: str) -> Path:
+    suffix = ext.lower() if ext.lower() in IMAGE_EXTENSIONS else ".png"
+    return templates_dir / "_previews" / f"{template_path.stem}{suffix}"
+
+
+def remove_template_preview_variants(templates_dir: Path, template_path: Path, keep_path: Path | None = None) -> None:
+    preview_dir = templates_dir / "_previews"
+    keep_resolved = keep_path.resolve() if keep_path else None
+    for ext in sorted(IMAGE_EXTENSIONS):
+        candidate = preview_dir / f"{template_path.stem}{ext}"
+        try:
+            if keep_resolved and candidate.resolve() == keep_resolved:
+                continue
+            if candidate.exists() and path_in_root(candidate, templates_dir):
+                candidate.unlink()
+        except OSError:
+            continue
+
+
+def write_template_preview_image(
+    templates_dir: Path,
+    template_path: Path,
+    mime_type: str,
+    original_name: str,
+    raw: bytes,
+) -> Path:
+    ext = extension_from_mime(mime_type, original_name)
+    preview_path = template_preview_path_for_ext(templates_dir, template_path, ext)
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    remove_template_preview_variants(templates_dir, template_path, keep_path=preview_path)
+    preview_path.write_bytes(raw)
+    return preview_path
+
+
+def auto_template_name(kind: str, prompt_text: str, *image_names: str) -> str:
+    haystack = " ".join([prompt_text, *image_names]).lower()
+    style_patterns = [
+        (r"blueprint|technical|cyanotype|設計図|図面", "blueprint_technical"),
+        (r"notebook|doodle|blue ink|ノート|手書き|落書き", "notebook_blue_ink"),
+        (r"neumorphism|raised ui|soft white|ニューモ", "soft_neumorphism"),
+        (r"memphis|flat illustration|メンフィス|フラット", "corporate_memphis"),
+        (r"minimal line|line art|white space|余白|線画", "minimal_line_white"),
+        (r"vector|corporate minimal|ベクター", "vector_minimal"),
+        (r"home office|laptop|remote|在宅|リモート|pc", "remote_work"),
+        (r"factory|industrial|工場|製造|検査|組立", "factory_recruit"),
+        (r"求人|recruit|banner|バナー", "job_banner"),
+    ]
+    for pattern, label in style_patterns:
+        if re.search(pattern, haystack, flags=re.IGNORECASE):
+            return label
+
+    for image_name in image_names:
+        stem = sanitize_name(Path(str(image_name or "")).stem, "")
+        compact = re.sub(r"[_\-\s]+", "_", stem).strip("_")
+        if compact and not re.fullmatch(r"(image|img|photo|picture|screenshot|screen_shot|download|untitled)[_\-\d]*", compact, flags=re.IGNORECASE):
+            return compact[:48]
+
+    normalized_kind = normalize_kind(kind)
+    if normalized_kind == "factory":
+        return "factory_recruit"
+    if normalized_kind in {"remote", "remote1", "remote2"}:
+        return "remote_work"
+    return "job_banner"
+
+
 def list_templates(templates_dir: Path) -> list[dict[str, Any]]:
     templates: list[dict[str, Any]] = []
     if not templates_dir.exists():
@@ -1622,6 +1715,115 @@ def update_region_assignments(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def task_board_project_url() -> str:
+    return f"https://github.com/users/{GITHUB_PROJECT_OWNER}/projects/{GITHUB_PROJECT_NUMBER}"
+
+
+def task_board_error_state(message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "available": False,
+        "checked_at": display_time(),
+        "owner": GITHUB_PROJECT_OWNER,
+        "project_number": GITHUB_PROJECT_NUMBER,
+        "url": task_board_project_url(),
+        "items": [],
+        "counts": {},
+        "error": message,
+    }
+
+
+def normalize_task_board_item(item: dict[str, Any]) -> dict[str, Any]:
+    content = item.get("content") if isinstance(item.get("content"), dict) else {}
+    return {
+        "title": str(item.get("title") or content.get("title") or "無題"),
+        "url": str(content.get("url") or ""),
+        "number": content.get("number") or "",
+        "status": str(item.get("status") or "未設定"),
+        "priority": str(item.get("priority") or "未設定"),
+        "type": str(item.get("type") or content.get("type") or "未設定"),
+        "area": str(item.get("area") or "未設定"),
+    }
+
+
+def task_board_state(force: bool = False) -> dict[str, Any]:
+    with task_board_cache_lock:
+        cached = task_board_cache.get("state")
+        checked_at = float(task_board_cache.get("checked_at") or 0.0)
+        if not force and isinstance(cached, dict) and time.monotonic() - checked_at < GITHUB_PROJECT_CACHE_SECONDS:
+            return cached
+
+    executable = shutil.which("gh")
+    if not executable:
+        state = task_board_error_state("GitHub CLI `gh` が見つかりません")
+    else:
+        try:
+            result = subprocess.run(
+                [
+                    executable,
+                    "project",
+                    "item-list",
+                    str(GITHUB_PROJECT_NUMBER),
+                    "--owner",
+                    GITHUB_PROJECT_OWNER,
+                    "--format",
+                    "json",
+                    "--limit",
+                    str(GITHUB_PROJECT_ITEM_LIMIT),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+                timeout=GITHUB_PROJECT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            state = task_board_error_state(f"Task Board の取得が {GITHUB_PROJECT_TIMEOUT_SECONDS} 秒以内に完了しませんでした")
+        else:
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+                state = task_board_error_state(detail[-1200:])
+            else:
+                try:
+                    payload = json.loads(result.stdout or "{}")
+                except json.JSONDecodeError as exc:
+                    state = task_board_error_state(f"Task Board のJSONを読めませんでした: {exc}")
+                else:
+                    raw_items = payload.get("items") if isinstance(payload.get("items"), list) else []
+                    items = [normalize_task_board_item(item) for item in raw_items if isinstance(item, dict)]
+                    active_items = [item for item in items if item["status"] != "Done"]
+                    status_rank = {"In Progress": 0, "Review": 1, "Todo": 2, "Backlog": 3, "未設定": 4}
+                    priority_rank = {"High": 0, "Medium": 1, "Low": 2, "未設定": 3}
+                    active_items.sort(
+                        key=lambda item: (
+                            status_rank.get(item["status"], 4),
+                            priority_rank.get(item["priority"], 3),
+                            str(item["number"] or ""),
+                        )
+                    )
+                    counts: dict[str, int] = {}
+                    for item in items:
+                        counts[item["status"]] = counts.get(item["status"], 0) + 1
+                    state = {
+                        "ok": True,
+                        "available": True,
+                        "checked_at": display_time(),
+                        "owner": GITHUB_PROJECT_OWNER,
+                        "project_number": GITHUB_PROJECT_NUMBER,
+                        "url": task_board_project_url(),
+                        "items": active_items[:8],
+                        "counts": counts,
+                        "total": payload.get("totalCount") or len(items),
+                        "error": "",
+                    }
+
+    with task_board_cache_lock:
+        task_board_cache["checked_at"] = time.monotonic()
+        task_board_cache["state"] = state
+    return state
+
+
 def app_state(output_root: Path, templates_dir: Path) -> dict[str, Any]:
     rotation_report = output_root / "rotation_report.md"
     with jobs_lock:
@@ -1648,6 +1850,7 @@ def app_state(output_root: Path, templates_dir: Path) -> dict[str, Any]:
         "post_rules": load_post_rules(),
         "post_style_samples": list_post_style_samples(),
         "project_samples": list_project_samples(),
+        "task_board": task_board_state(),
     }
 
 
@@ -1938,6 +2141,49 @@ def post_generation_target(account: dict[str, Any], slot: dict[str, Any], prefer
     }
 
 
+def is_validation_failed_scope(scope: str) -> bool:
+    return str(scope or "").strip().lower().replace("-", "_") in {
+        VALIDATION_FAILED_POST_SCOPE,
+        "failed_validation",
+        "validation_error",
+        "validation_errors",
+    }
+
+
+def validation_failed_post_target(account: dict[str, Any], slot: dict[str, Any], prefer_sheet: bool = False) -> dict[str, Any] | None:
+    validation = slot.get("validation") if isinstance(slot.get("validation"), dict) else {}
+    status = str(validation.get("status") or "")
+    if status not in VALIDATION_FAILED_STATUSES:
+        return None
+    target = post_generation_target(account, slot, prefer_sheet=prefer_sheet)
+    if not (
+        normalized_post_text(target.get("current_text", ""))
+        or normalized_post_text(target.get("sheet_text", ""))
+        or normalized_post_text(target.get("local_text", ""))
+    ):
+        return None
+    issues = validation.get("issues") if isinstance(validation.get("issues"), list) else []
+    target.update(
+        {
+            "validation_status": status,
+            "validation_summary": str(validation.get("summary") or validation.get("message") or ""),
+            "validation_checked_at": str(validation.get("checked_at") or ""),
+            "validation_issues": [
+                {
+                    "field": str(issue.get("field") or ""),
+                    "expected": str(issue.get("expected") or ""),
+                    "observed": str(issue.get("observed") or ""),
+                    "severity": str(issue.get("severity") or ""),
+                    "reason": str(issue.get("reason") or ""),
+                }
+                for issue in issues[:5]
+                if isinstance(issue, dict)
+            ],
+        }
+    )
+    return target
+
+
 def resolve_post_generation_targets(output_root: Path, payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not cached_sheet_state().get("loaded_at"):
         try:
@@ -1947,17 +2193,27 @@ def resolve_post_generation_targets(output_root: Path, payload: dict[str, Any]) 
 
     scope = str(payload.get("scope") or "").strip().lower()
     prefer_sheet = bool(payload.get("prefer_sheet"))
+    validation_failed_scope = is_validation_failed_scope(scope)
     account_name = normalize_account_name(payload.get("account_name"))
     kind = normalize_kind(str(payload.get("kind") or ""))
     accounts = grouped_accounts(output_root)
     targets: list[dict[str, Any]] = []
 
     for account in accounts:
-        if scope != "all" and normalize_account_name(account.get("account_name")) != account_name:
+        if (
+            scope not in {"all", VALIDATION_FAILED_POST_SCOPE}
+            and not validation_failed_scope
+            and normalize_account_name(account.get("account_name")) != account_name
+        ):
             continue
         for slot_kind, slot in (account.get("slots") or {}).items():
             normalized_kind = normalize_kind(str(slot_kind))
             if normalized_kind not in POST_FIELD_KEYS:
+                continue
+            if validation_failed_scope:
+                target = validation_failed_post_target(account, slot, prefer_sheet=prefer_sheet)
+                if target:
+                    targets.append(target)
                 continue
             if scope != "all" and normalized_kind != kind:
                 continue
@@ -1970,6 +2226,10 @@ def resolve_post_generation_targets(output_root: Path, payload: dict[str, Any]) 
                 continue
             targets.append(target)
 
+    if validation_failed_scope:
+        if not targets:
+            raise ValueError("検証NGの投稿文がありません。先に画像一括検証を実行し、要確認または検証失敗の枠を作ってください")
+        return targets
     if scope == "all":
         if not targets:
             raise ValueError("AI再作成の対象投稿文がありません。先にシート読込または投稿文作成を実行してください")
@@ -1983,7 +2243,7 @@ def resolve_post_generation_targets(output_root: Path, payload: dict[str, Any]) 
 
 def compact_target_for_prompt(target: dict[str, Any], variation_profiles: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     target_id = target["target_id"]
-    return {
+    compact = {
         "target_id": target_id,
         "account_name": target["account_name"],
         "kind": target["kind"],
@@ -1994,6 +2254,14 @@ def compact_target_for_prompt(target: dict[str, Any], variation_profiles: dict[s
         "variation_profile": (variation_profiles or {}).get(target_id, {}),
         "current_post": short_context_text(target.get("current_text") or target.get("sheet_text") or "", 2800),
     }
+    if target.get("validation_status"):
+        compact["validation"] = {
+            "status": target.get("validation_status") or "",
+            "summary": target.get("validation_summary") or "",
+            "checked_at": target.get("validation_checked_at") or "",
+            "issues": target.get("validation_issues") or [],
+        }
+    return compact
 
 
 def build_post_generation_prompt(
@@ -2005,6 +2273,7 @@ def build_post_generation_prompt(
 ) -> str:
     has_factory = any(target["kind"] == "factory" for target in targets)
     has_remote = any(target["kind"] != "factory" for target in targets)
+    has_validation_failed_targets = any(target.get("validation_status") for target in targets)
     rules_sections = []
     if has_factory:
         rules_sections.append("工場対象ルール:\n" + post_rules_prompt("factory"))
@@ -2032,6 +2301,13 @@ def build_post_generation_prompt(
         indent=2,
     )
     previous_text = "\n".join(f"- {item}" for item in previous_hooks[-30:]) or "なし"
+    validation_repair_notes = [
+        "検証NG再生成の扱い:",
+        "- validation がある対象は、画像検証で要確認または検証失敗になった投稿文です。",
+        "- validation.summary と validation.issues を読み、画像と投稿文の矛盾が消えるように投稿文を再生成してください。",
+        "- 画像側で読めた給与、職種、勤務種別が対象のkindや地域と矛盾しない場合は、投稿文側をその条件へ寄せてください。",
+        "- 画像が明らかに別枠・別種別に見える場合でも、投稿文では対象kindと現在の地域を守り、実在しない条件を追加しないでください。",
+    ] if has_validation_failed_targets else []
     return "\n".join(
         [
             "あなたはジモティ求人投稿文の制作担当です。",
@@ -2046,13 +2322,14 @@ def build_post_generation_prompt(
             "- 1行目タイトルは variation_profile の title_style / appeal_axis / audience / emoji_instruction に合わせ、その都度違う切り口で新しく書く。",
             "- 投稿文本文にはシャープ記号やアスタリスク装飾を使わない。箇条書きの行頭ハイフンだけ使用可。",
             "- 【公式LINEURL】を必ず含める。実URL、電話番号、実在企業名、公式認定のような表現は追加しない。",
-            "- 地域、給与、勤務条件、工場/在宅の種別は、現在の投稿文・シート情報・案件素材から勝手に変えない。",
+            "- 地域、給与、勤務条件、工場/在宅の種別は、validation 指摘の矛盾解消に必要な場合を除き、現在の投稿文・シート情報・案件素材から勝手に変えない。",
             "- 工場投稿は工場求人として書き、完全在宅や出勤不要など在宅求人に見える表現を入れない。",
             "- 在宅投稿は完全在宅求人として書き、「完全在宅」と「未経験OK」を必ず入れる。",
             "- スタイル見本は文体、絵文字、構成だけ参考にし、地域、給与、条件、職種は対象投稿を優先する。",
             "- 同じバッチ内で1行目タイトル、冒頭フック、訴求軸、対象人物像、絵文字量、構成、CTA前の流れを重複させない。",
             "- emoji_level が none の対象では絵文字を使わない。light / medium / expressive は emoji_instruction に従い、求人投稿として自然な範囲にする。",
             "- 過去バッチの冒頭と似た書き出しを避ける。",
+            *validation_repair_notes,
             "",
             f"バッチ: {batch_index}/{batch_total}",
             "過去バッチで使った冒頭:",
@@ -2341,16 +2618,25 @@ def run_post_generation_job(job_id: str, output_root: Path, templates_dir: Path,
 def start_post_generation(output_root: Path, templates_dir: Path, payload: dict[str, Any]) -> Job:
     targets = resolve_post_generation_targets(output_root, payload)
     scope = str(payload.get("scope") or "").strip().lower()
-    account_name = "" if scope == "all" else targets[0]["account_name"]
-    kind = "all" if scope == "all" else targets[0]["kind"]
-    label = "投稿文一括AI再作成" if scope == "all" else f"{targets[0]['label']}投稿文AI再作成"
+    validation_failed_scope = is_validation_failed_scope(scope)
+    account_name = "" if scope == "all" or validation_failed_scope else targets[0]["account_name"]
+    kind = "all" if scope == "all" else VALIDATION_FAILED_POST_SCOPE if validation_failed_scope else targets[0]["kind"]
+    if validation_failed_scope:
+        label = "検証NG投稿文AI再作成"
+    else:
+        label = "投稿文一括AI再作成" if scope == "all" else f"{targets[0]['label']}投稿文AI再作成"
     with jobs_lock:
         running = [
             job
             for job in jobs.values()
             if job.command == "post-generate"
             and job.status == "running"
-            and (scope == "all" or (job.account_name == account_name and job.kind == kind))
+            and (
+                scope == "all"
+                or validation_failed_scope
+                or job.kind in {"all", VALIDATION_FAILED_POST_SCOPE}
+                or (job.account_name == account_name and job.kind == kind)
+            )
         ]
         if running:
             return running[0]
@@ -2488,35 +2774,53 @@ def save_prompt(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
 def save_template(templates_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     templates_dir.mkdir(parents=True, exist_ok=True)
     kind = normalize_kind(str(payload.get("kind") or "common"))
-    name = sanitize_name(str(payload.get("name") or ""), "template")
+    submitted_prompt_text = str(payload.get("text") or "").strip()
+    reference_data_url = str(payload.get("reference_data_url") or "")
+    reference_name = str(payload.get("reference_name") or "")
+    preview_data_url = str(payload.get("preview_data_url") or "")
+    preview_name = str(payload.get("preview_name") or "")
+
+    submitted_name = str(payload.get("name") or "").strip()
+    name_source = submitted_name or auto_template_name(kind, submitted_prompt_text, reference_name, preview_name)
+    name = sanitize_name(name_source, "template")
     prefix = template_prefix(kind)
     if not name.lower().startswith(prefix.lower()):
         name = f"{prefix}_{name}"
 
     path = templates_dir / f"{name}.md"
+    if not submitted_name:
+        path = unique_path(path)
     if not path_in_root(path):
         raise ValueError("テンプレート保存先が不正です")
 
-    submitted_prompt_text = str(payload.get("text") or "").strip()
     prompt_text = submitted_prompt_text
     reference_path = None
-    reference_data_url = str(payload.get("reference_data_url") or "")
-    reference_name = str(payload.get("reference_name") or "")
+    reference_image: tuple[str, bytes, str] | None = None
     if reference_data_url:
         mime_type, raw = decode_data_url(reference_data_url)
         ext = extension_from_mime(mime_type, reference_name)
         reference_path = REFERENCE_IMAGES_DIR / f"{now_stamp()}_{name}{ext}"
         reference_path.parent.mkdir(parents=True, exist_ok=True)
         reference_path.write_bytes(raw)
+        reference_image = (mime_type, raw, reference_name)
 
-    derive_prompt = bool(reference_path and not submitted_prompt_text)
-    if not prompt_text and reference_path:
+    preview_path = None
+    if preview_data_url:
+        mime_type, raw = decode_data_url(preview_data_url)
+        preview_path = write_template_preview_image(templates_dir, path, mime_type, preview_name, raw)
+    elif reference_image:
+        mime_type, raw, original_name = reference_image
+        preview_path = write_template_preview_image(templates_dir, path, mime_type, original_name, raw)
+
+    prompt_source_path = reference_path or (preview_path if preview_data_url else None)
+    derive_prompt = bool(prompt_source_path and not submitted_prompt_text)
+    if not prompt_text and prompt_source_path:
         prompt_text = "\n".join(
             [
                 "Use case: ads-marketing",
                 "Asset type: 1:1 Japanese job recruitment banner for Jimoty",
                 "Primary request: Create a banner based on the saved reference image.",
-                "Reference image path: " + rel_to_root(reference_path),
+                "Reference image path: " + rel_to_root(prompt_source_path),
                 "Main copy to include in Japanese: 「{{role_phrase}}」「{{salary_text}}」「未経験OK」",
                 "Visual direction: Keep the reference image mood, layout density, and color balance while making the job category clear.",
                 "Layout: Large headline, three short benefit points, clear CTA area. Keep Japanese text readable on a phone.",
@@ -2529,14 +2833,7 @@ def save_template(templates_dir: Path, payload: dict[str, Any]) -> dict[str, Any
 
     path.write_text(prompt_text.rstrip() + "\n", encoding="utf-8")
 
-    preview_data_url = str(payload.get("preview_data_url") or "")
-    preview_path = None
-    if preview_data_url:
-        mime_type, raw = decode_data_url(preview_data_url)
-        ext = extension_from_mime(mime_type, str(payload.get("preview_name") or ""))
-        preview_path = templates_dir / "_previews" / f"{path.stem}{ext}"
-        preview_path.parent.mkdir(parents=True, exist_ok=True)
-        preview_path.write_bytes(raw)
+    existing_preview_path = preview_path or preview_for_template(templates_dir, path)
 
     return {
         "saved": True,
@@ -2545,11 +2842,191 @@ def save_template(templates_dir: Path, payload: dict[str, Any]) -> dict[str, Any
         "kind": kind,
         "path": rel_to_root(path),
         "preview_path": rel_to_root(preview_path) if preview_path else "",
-        "reference_path": rel_to_root(reference_path) if reference_path else "",
+        "reference_path": rel_to_root(prompt_source_path) if prompt_source_path else "",
         "derive_prompt": derive_prompt,
         "should_create_prompt": derive_prompt,
-        "should_generate_preview": False,
+        "should_generate_preview": bool(submitted_prompt_text and not existing_preview_path),
     }
+
+
+def template_ai_schema_path() -> Path:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name", "prompt_text", "safe_style_summary"],
+        "properties": {
+            "name": {"type": "string"},
+            "prompt_text": {"type": "string"},
+            "safe_style_summary": {"type": "string"},
+        },
+    }
+    handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+    with handle:
+        json.dump(schema, handle, ensure_ascii=False)
+    return Path(handle.name)
+
+
+def build_ai_template_prompt(kind: str, instruction: str) -> str:
+    normalized_kind = normalize_kind(kind)
+    kind_label = {
+        "common": "共通",
+        "factory": "工場",
+        "remote": "在宅",
+        "remote1": "在宅",
+        "remote2": "在宅",
+    }.get(normalized_kind, normalized_kind)
+    image_rules = image_rules_prompt(normalized_kind)
+    sample = template_sample_context(normalized_kind)
+    return "\n".join(
+        [
+            "You are creating a reusable GaFoo-style image prompt template for the local JMTY GUI.",
+            "Return JSON only. Do not write files.",
+            "",
+            "The template will be used for Japanese local job recruitment banner images.",
+            "Create a reusable prompt template, not a one-off image prompt.",
+            "Use placeholders such as {{role_phrase}}, {{salary_text}}, {{region}}, and {{copy}} where useful.",
+            "Keep salary/readability hierarchy, phone readability, square 1:1 layout, and job-ad suitability.",
+            "",
+            "Safety and style handling:",
+            "- If the user asks for a style tied to an existing publication, franchise, artist, anime, manga, game, or brand, do not imitate it directly.",
+            "- Translate it into broad visual traits such as shonen manga magazine energy, bold kinetic typography, speed lines, high contrast, dynamic layout, halftone texture, and dramatic composition.",
+            "- Do not use trademarked publication names, character names, logos, official badges, or exact visual identity in the final template.",
+            "- Do not include QR codes, real company names, or official-looking badges.",
+            "",
+            f"Template kind: {kind_label} ({normalized_kind})",
+            "User short instruction:",
+            instruction.strip(),
+            "",
+            "JMTY image rules to incorporate:",
+            image_rules,
+            "",
+            "Fictional preview sample context:",
+            f"- Region: {sample['region']}",
+            f"- Salary: {sample['salary']}",
+            f"- Role: {sample['role']}",
+            f"- Copy: {sample['copy']}",
+            f"- Scene: {sample['scene']}",
+            "",
+            "JSON fields:",
+            "- name: short snake_case English/Japanese-safe filename stem without kind prefix. Example: shonen_manga_energy",
+            "- prompt_text: reusable GaFoo prompt template text. It must be detailed enough for future image generation.",
+            "- safe_style_summary: short Japanese summary of how risky named references were generalized.",
+        ]
+    )
+
+
+def save_ai_generated_template(templates_dir: Path, kind: str, name: str, prompt_text: str) -> dict[str, Any]:
+    normalized_kind = normalize_kind(kind)
+    clean_prompt = str(prompt_text or "").strip()
+    if not clean_prompt:
+        raise ValueError("AIテンプレ本文が空です")
+    name_source = str(name or "").strip() or auto_template_name(normalized_kind, clean_prompt)
+    filename_stem = sanitize_name(name_source, "ai_template")
+    prefix = template_prefix(normalized_kind)
+    if not filename_stem.lower().startswith(prefix.lower()):
+        filename_stem = f"{prefix}_{filename_stem}"
+    path = unique_path(templates_dir / f"{filename_stem}.md")
+    if not path_in_root(path, templates_dir):
+        raise ValueError("テンプレート保存先が不正です")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(clean_prompt.rstrip() + "\n", encoding="utf-8")
+    return {
+        "filename": path.name,
+        "name": path.stem,
+        "kind": normalized_kind,
+        "path": rel_to_root(path),
+        "prompt_path": rel_to_root(path),
+    }
+
+
+def run_ai_template_generation_job(job_id: str, templates_dir: Path, kind: str, instruction: str) -> None:
+    schema_path = template_ai_schema_path()
+    try:
+        update_job(job_id, phase="AIテンプレ作成中", progress=18)
+        result = subprocess.run(
+            [
+                *codex_exec_base_command("read-only"),
+                "--output-schema",
+                str(schema_path),
+                "-",
+            ],
+            cwd=ROOT,
+            env=os.environ.copy(),
+            input=build_ai_template_prompt(kind, instruction),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=CODEX_REWRITE_TIMEOUT_SECONDS,
+        )
+        raw = (result.stdout or "").strip()
+        update_job(job_id, returncode=result.returncode, stdout=raw[-6000:], stderr=(result.stderr or "")[-6000:], phase="生成結果を保存中", progress=72)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or raw or f"codex exec exited with {result.returncode}")
+        parsed = extract_json_object(raw)
+        if not parsed:
+            raise RuntimeError("AIテンプレ生成結果をJSONとして読めませんでした")
+        saved = save_ai_generated_template(templates_dir, kind, str(parsed.get("name") or ""), str(parsed.get("prompt_text") or ""))
+        preview_job = start_template_preview_generation(
+            templates_dir,
+            {
+                "filename": saved["filename"],
+                "kind": saved["kind"],
+            },
+        )
+        update_job(
+            job_id,
+            status="done",
+            progress=100,
+            phase="テンプレ保存・見本生成開始",
+            finished_at=display_time(),
+            generated=True,
+            template_name=saved["name"],
+            kind=saved["kind"],
+            label="AIテンプレ",
+            prompt_path=saved["prompt_path"],
+            image_path=preview_job.image_path,
+            stdout=(
+                f"saved: {saved['path']}\n"
+                f"preview_job: {preview_job.id}\n"
+                f"summary: {parsed.get('safe_style_summary') or ''}\n"
+            )[-6000:],
+            stderr="",
+        )
+    except Exception as exc:
+        update_job(
+            job_id,
+            status="failed",
+            progress=100,
+            phase="AIテンプレ作成失敗",
+            finished_at=display_time(),
+            stderr=str(exc)[-6000:],
+        )
+    finally:
+        try:
+            schema_path.unlink()
+        except OSError:
+            pass
+
+
+def start_ai_template_generation(templates_dir: Path, payload: dict[str, Any]) -> Job:
+    kind = normalize_kind(str(payload.get("kind") or "common"))
+    instruction = str(payload.get("instruction") or "").strip()
+    if not instruction:
+        raise ValueError("AIテンプレの指示を入力してください")
+    job = Job(
+        id=f"{now_stamp()}_template_ai_{sanitize_name(kind)}",
+        command="template-ai-generate",
+        started_at=display_time(),
+        progress=8,
+        phase="指示を整理中",
+        kind=kind,
+        label="AIテンプレ",
+    )
+    with jobs_lock:
+        jobs[job.id] = job
+    threading.Thread(target=run_ai_template_generation_job, args=(job.id, templates_dir, kind, instruction), daemon=True).start()
+    return job
 
 
 def delete_template(templates_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3349,7 +3826,15 @@ def start_template_preview_generation(templates_dir: Path, payload: dict[str, An
     return job
 
 
-def run_codex_image_generation_job(job_id: str, prompt: str, image_path: Path, account_name: str, kind: str, output_root: Path) -> None:
+def run_codex_image_generation_job(
+    job_id: str,
+    prompt: str,
+    image_path: Path,
+    account_name: str,
+    kind: str,
+    output_root: Path,
+    allow_generated_image_fallback: bool = True,
+) -> None:
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     process: subprocess.Popen[str] | None = None
@@ -3417,11 +3902,17 @@ def run_codex_image_generation_job(job_id: str, prompt: str, image_path: Path, a
             raise RuntimeError(stderr.strip() or stdout.strip() or f"codex exec exited with {returncode}")
 
         current_mtime_ns = file_mtime_ns(image_path)
-        if not current_mtime_ns or (previous_mtime_ns and current_mtime_ns == previous_mtime_ns):
+        if allow_generated_image_fallback and (not current_mtime_ns or (previous_mtime_ns and current_mtime_ns == previous_mtime_ns)):
             generated = newest_codex_generated_image(started)
             if generated:
                 copy_generated_image(generated, image_path)
                 current_mtime_ns = file_mtime_ns(image_path)
+        elif not allow_generated_image_fallback and (not current_mtime_ns or (previous_mtime_ns and current_mtime_ns == previous_mtime_ns)):
+            append_job_output(
+                job_id,
+                "\n[image-generate] 並列実行中のため、~/.codex/generated_images からの最新画像fallbackは無効です。\n",
+                stderr=True,
+            )
         if not current_mtime_ns:
             raise FileNotFoundError(f"生成画像が保存されませんでした: {image_path}")
         if previous_mtime_ns and current_mtime_ns == previous_mtime_ns:
@@ -3457,6 +3948,7 @@ def run_codex_image_generation_job(job_id: str, prompt: str, image_path: Path, a
 def start_codex_image_generation(output_root: Path, templates_dir: Path, payload: dict[str, Any]) -> Job:
     account_name = str(payload.get("account_name") or "").strip()
     kind = normalize_kind(str(payload.get("kind") or ""))
+    allow_generated_image_fallback = bool(payload.get("allow_generated_image_fallback", True))
     if not account_name or kind not in EXPECTED_IMAGE_FILENAMES:
         raise ValueError("アカウント名または種別が不正です")
     with jobs_lock:
@@ -3486,7 +3978,7 @@ def start_codex_image_generation(output_root: Path, templates_dir: Path, payload
         jobs[job.id] = job
     thread = threading.Thread(
         target=run_codex_image_generation_job,
-        args=(job.id, str(bundle["prompt"]), bundle["image_path"], account_name, kind, output_root),
+        args=(job.id, str(bundle["prompt"]), bundle["image_path"], account_name, kind, output_root, allow_generated_image_fallback),
         daemon=True,
     )
     thread.start()
@@ -3619,6 +4111,171 @@ def collect_weekly_bulk_image_targets(output_root: Path, *, missing_only: bool =
     return targets
 
 
+def group_weekly_bulk_image_targets(targets: list[dict[str, str]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    ordered: list[dict[str, Any]] = []
+    for target in targets:
+        account_name = str(target["account_name"])
+        group = grouped.get(account_name)
+        if not group:
+            group = {
+                "account_name": account_name,
+                "status": "queued",
+                "phase": "待機中",
+                "progress": 0,
+                "done": 0,
+                "total": 0,
+                "current": "",
+                "targets": [],
+            }
+            grouped[account_name] = group
+            ordered.append(group)
+        group["targets"].append({**target, "status": "queued", "phase": "待機中", "progress": 0})
+        group["total"] = len(group["targets"])
+    return ordered
+
+
+def run_weekly_bulk_image_generation_step(
+    job_id: str,
+    output_root: Path,
+    templates_dir: Path,
+    image_targets: list[dict[str, str]],
+) -> None:
+    step = weekly_bulk_step(2)
+    base = int(step["start"])
+    end = int(step["end"])
+    span = end - base
+    grouped_targets = group_weekly_bulk_image_targets(image_targets)
+    total_images = max(1, len(image_targets))
+    max_workers = min(WEEKLY_ACCOUNT_PARALLELISM, max(1, len(grouped_targets)))
+    worker_lock = threading.Lock()
+    cancel_event = threading.Event()
+
+    def update_workers(phase: str = "") -> None:
+        completed_units = 0.0
+        for item in grouped_targets:
+            completed_units += int(item.get("done") or 0)
+            if item.get("status") == "running":
+                completed_units += max(0, min(100, int(item.get("progress") or 0))) / 100
+        progress = base + int(span * min(completed_units, total_images) / total_images)
+        running_names = [
+            f"{item['account_name']} ({item.get('done', 0)}/{item.get('total', 0)})"
+            for item in grouped_targets
+            if item.get("status") == "running"
+        ]
+        done_count = sum(int(item.get("done") or 0) for item in grouped_targets)
+        running_count = sum(1 for item in grouped_targets if item.get("status") == "running")
+        failed_count = sum(1 for item in grouped_targets if item.get("status") == "failed")
+        phase_text = phase or (
+            f"{max_workers}並列 / {done_count}/{total_images}件"
+            + (f" / 実行中: {', '.join(running_names[:3])}" if running_names else "")
+        )
+        update_weekly_bulk_step(job_id, 2, phase_text, progress)
+        update_job(
+            job_id,
+            worker_total=len(grouped_targets),
+            worker_running=running_count,
+            worker_done=sum(1 for item in grouped_targets if item.get("status") == "done"),
+            worker_failed=failed_count,
+            worker_items=clone_worker_items(grouped_targets),
+        )
+
+    def run_account_group(group_index: int) -> None:
+        group = grouped_targets[group_index]
+        account_name = str(group["account_name"])
+        with worker_lock:
+            if cancel_event.is_set():
+                group.update({"status": "skipped", "phase": "前工程失敗のためスキップ"})
+                update_workers()
+                return
+            group.update({"status": "running", "phase": "開始", "progress": 0, "current": ""})
+            update_workers()
+
+        for target_index, target in enumerate(group["targets"]):
+            if cancel_event.is_set():
+                with worker_lock:
+                    target.update({"status": "skipped", "phase": "前工程失敗のためスキップ"})
+                    group.update({"phase": "中断", "current": ""})
+                    update_workers()
+                return
+
+            label = f"{target['account_name']} / {target['label']}"
+            with worker_lock:
+                target.update({"status": "running", "phase": "開始", "progress": 0})
+                group.update({"status": "running", "phase": f"{target['label']} を生成中", "current": str(target["label"]), "progress": 0})
+                update_workers()
+
+            child = start_codex_image_generation(
+                output_root,
+                templates_dir,
+                {
+                    "account_name": target["account_name"],
+                    "kind": target["kind"],
+                    "allow_generated_image_fallback": False,
+                },
+            )
+            while True:
+                with jobs_lock:
+                    child_snapshot = replace(jobs[child.id])
+                child_progress = max(0, min(100, int(child_snapshot.progress or 0)))
+                with worker_lock:
+                    target.update({"phase": child_snapshot.phase or "画像生成中", "progress": child_progress})
+                    group_progress = int(((target_index + child_progress / 100) / max(1, int(group["total"]))) * 100)
+                    group.update(
+                        {
+                            "phase": f"{target['label']}: {child_snapshot.phase or '画像生成中'}",
+                            "current": str(target["label"]),
+                            "progress": group_progress,
+                        }
+                    )
+                    update_workers()
+
+                if child_snapshot.status == "done":
+                    append_job_output(
+                        job_id,
+                        f"\n--- 画像生成 / {label} ---\n{child_snapshot.stdout or ''}\n{child_snapshot.stderr or ''}\n",
+                    )
+                    with worker_lock:
+                        target.update({"status": "done", "phase": "完了", "progress": 100})
+                        group["done"] = int(group.get("done") or 0) + 1
+                        group.update({"progress": int(group["done"] / max(1, int(group["total"])) * 100)})
+                        update_workers()
+                    break
+                if child_snapshot.status == "failed":
+                    append_job_output(
+                        job_id,
+                        f"\n--- 画像生成失敗 / {label} ---\n{child_snapshot.stdout or ''}\n{child_snapshot.stderr or ''}\n",
+                        stderr=True,
+                    )
+                    with worker_lock:
+                        target.update({"status": "failed", "phase": child_snapshot.stderr or "失敗", "progress": 100})
+                        group.update({"status": "failed", "phase": f"{target['label']} 失敗", "progress": 100})
+                        update_workers(f"{label} の画像生成に失敗")
+                    raise RuntimeError(child_snapshot.stderr or child_snapshot.stdout or f"{label} の画像生成に失敗しました")
+                time.sleep(2)
+
+        with worker_lock:
+            group.update({"status": "done", "phase": "完了", "progress": 100, "current": ""})
+            update_workers()
+
+    update_workers(f"{max_workers}並列で画像生成を開始")
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jmty-weekly-image") as executor:
+        futures = {executor.submit(run_account_group, index): grouped_targets[index]["account_name"] for index in range(len(grouped_targets))}
+        for future in as_completed(futures):
+            account_name = futures[future]
+            try:
+                future.result()
+            except Exception as exc:
+                errors.append(f"{account_name}: {exc}")
+                cancel_event.set()
+                for pending in futures:
+                    if not pending.done():
+                        pending.cancel()
+    if errors:
+        raise RuntimeError("画像生成に失敗しました: " + " / ".join(errors[:3]))
+
+
 def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path, *, resume: bool = False) -> None:
     try:
         auth = gws_auth_status(force=True)
@@ -3653,39 +4310,7 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path, *, 
                     job_id,
                     f"\n[{display_time()}] 途中から再実行: 生成済み画像 {skipped}件をスキップ / 未生成 {len(image_targets)}件\n",
                 )
-            for index, target in enumerate(image_targets, start=1):
-                label = f"{target['account_name']} / {target['label']}"
-                step = weekly_bulk_step(2)
-                base = int(step["start"])
-                end = int(step["end"])
-                span = end - base
-                start_progress = base + int(span * (index - 1) / len(image_targets))
-                update_weekly_bulk_step(job_id, 2, f"{label} を生成中 {index}/{len(image_targets)}", start_progress)
-                child = start_codex_image_generation(
-                    output_root,
-                    templates_dir,
-                    {"account_name": target["account_name"], "kind": target["kind"]},
-                )
-                while True:
-                    with jobs_lock:
-                        child_snapshot = replace(jobs[child.id])
-                    child_progress = max(0, min(100, int(child_snapshot.progress or 0)))
-                    progress = base + int(span * ((index - 1) + child_progress / 100) / len(image_targets))
-                    update_weekly_bulk_step(job_id, 2, child_snapshot.phase or f"{label} を生成中", progress)
-                    if child_snapshot.status == "done":
-                        append_job_output(
-                            job_id,
-                            f"\n--- 画像生成 {index}/{len(image_targets)} / {label} ---\n{child_snapshot.stdout or ''}\n{child_snapshot.stderr or ''}\n",
-                        )
-                        break
-                    if child_snapshot.status == "failed":
-                        append_job_output(
-                            job_id,
-                            f"\n--- 画像生成失敗 {index}/{len(image_targets)} / {label} ---\n{child_snapshot.stdout or ''}\n{child_snapshot.stderr or ''}\n",
-                            stderr=True,
-                        )
-                        raise RuntimeError(child_snapshot.stderr or child_snapshot.stdout or f"{label} の画像生成に失敗しました")
-                    time.sleep(2)
+            run_weekly_bulk_image_generation_step(job_id, output_root, templates_dir, image_targets)
             finish_weekly_bulk_step(job_id, 2, f"{len(image_targets)}件")
 
         run_weekly_bulk_command_step(
@@ -3731,6 +4356,99 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path, *, 
             phase="途中から再実行失敗" if resume else "週次一括実行失敗",
             finished_at=display_time(),
         )
+
+
+def run_weekly_phase_job(job_id: str, output_root: Path, templates_dir: Path, phase_key: str) -> None:
+    phase_indexes = {str(step["key"]): index for index, step in enumerate(WEEKLY_BULK_STEPS)}
+    step_index = phase_indexes.get(phase_key)
+    if step_index is None:
+        update_job(job_id, status="failed", progress=100, phase="未対応の工程", stderr=f"未対応の工程です: {phase_key}", finished_at=display_time())
+        return
+    step = weekly_bulk_step(step_index)
+    try:
+        auth = gws_auth_status(force=True)
+        if not auth.get("ok"):
+            raise RuntimeError(f"GWS認証が必要です: {auth.get('label') or auth.get('detail') or '未認証'}")
+
+        update_weekly_bulk_step(job_id, step_index, "開始")
+        if phase_key == "rotate":
+            run_weekly_bulk_command_step(job_id, step_index, "rotate-sheet", output_root, templates_dir, {})
+        elif phase_key == "posts":
+            post_job = start_post_generation(output_root, templates_dir, {"scope": "all", "prefer_sheet": True})
+            finished_post_job = wait_for_child_job(job_id, post_job.id, step_index, "投稿文一括AI再作成")
+            finish_weekly_bulk_step(job_id, step_index, f"{finished_post_job.generated_post_count or finished_post_job.validation_total}件")
+            update_job(job_id, status="done", progress=100, phase=f"{step['label']}: 完了", finished_at=display_time(), generated=True)
+            return
+        elif phase_key == "images":
+            image_targets = collect_weekly_bulk_image_targets(output_root)
+            if not image_targets:
+                append_job_output(job_id, f"\n[{display_time()}] 画像生成対象なし\n")
+                finish_weekly_bulk_step(job_id, step_index, "対象なし")
+            else:
+                run_weekly_bulk_image_generation_step(job_id, output_root, templates_dir, image_targets)
+                finish_weekly_bulk_step(job_id, step_index, f"{len(image_targets)}件")
+        elif phase_key == "drive":
+            run_weekly_bulk_command_step(
+                job_id,
+                step_index,
+                "sync-drive",
+                output_root,
+                templates_dir,
+                {"purge_account_images": True, "purge_existing": False},
+            )
+        elif phase_key == "sheet":
+            run_weekly_bulk_command_step(job_id, step_index, "sync-sheet", output_root, templates_dir, {})
+        elif phase_key == "sheet_validate":
+            run_weekly_bulk_command_step(job_id, step_index, "validate-sheet-posts", output_root, templates_dir, {"repair": True})
+        else:
+            raise ValueError(f"未対応の工程です: {phase_key}")
+
+        if phase_key not in {"posts", "images"}:
+            finish_weekly_bulk_step(job_id, step_index)
+        update_job(
+            job_id,
+            status="done",
+            progress=100,
+            phase=f"{step['label']}: 完了",
+            finished_at=display_time(),
+            generated=True,
+        )
+    except Exception as exc:
+        append_job_output(job_id, f"\n[{display_time()}] ERROR {exc}\n", stderr=True)
+        update_job(
+            job_id,
+            status="failed",
+            progress=100,
+            phase=f"{step['label']}: 失敗",
+            stderr=str(exc),
+            finished_at=display_time(),
+        )
+
+
+def start_weekly_phase_job(output_root: Path, templates_dir: Path, phase_key: str) -> Job:
+    phase_indexes = {str(step["key"]): index for index, step in enumerate(WEEKLY_BULK_STEPS)}
+    step_index = phase_indexes.get(phase_key)
+    if step_index is None:
+        raise ValueError(f"未対応の工程です: {phase_key}")
+    step = weekly_bulk_step(step_index)
+    with jobs_lock:
+        for existing in jobs.values():
+            if existing.status == "running":
+                raise ValueError(f"別の処理が実行中です: {existing.command}")
+        job = Job(
+            id=f"{now_stamp()}_weekly_phase_{sanitize_name(phase_key)}",
+            command=f"weekly-phase-{phase_key}",
+            started_at=display_time(),
+            progress=int(step["start"]),
+            phase=f"{step['label']}: 開始準備中",
+            label=str(step["label"]),
+            step_key=phase_key,
+            validation_total=len(WEEKLY_BULK_STEPS),
+            validation_done=step_index,
+        )
+        jobs[job.id] = job
+    threading.Thread(target=run_weekly_phase_job, args=(job.id, output_root, templates_dir, phase_key), daemon=True).start()
+    return job
 
 
 def start_weekly_bulk_job(output_root: Path, templates_dir: Path, *, resume: bool = False) -> Job:
@@ -3967,36 +4685,135 @@ def collect_validation_targets(output_root: Path, payload: dict[str, Any]) -> li
 
 
 def save_validation_result(account_name: str, kind: str, result: dict[str, Any]) -> None:
-    validations = load_image_validations()
-    validations[approval_key(account_name, kind)] = result
-    write_image_validations(validations)
+    with image_validation_file_lock:
+        validations = load_image_validations()
+        validations[approval_key(account_name, kind)] = result
+        write_image_validations(validations)
 
 
 def run_image_validation_job(job_id: str, targets: list[dict[str, Any]]) -> None:
     suspect_count = 0
-    try:
-        for index, target in enumerate(targets, start=1):
+    done_count = 0
+    max_workers = min(IMAGE_VALIDATION_CONCURRENCY, max(1, len(targets)))
+    worker_chunks: list[list[dict[str, Any]]] = [[] for _ in range(max_workers)]
+    for index, target in enumerate(targets):
+        worker_chunks[index % max_workers].append(target)
+    worker_chunks = [chunk for chunk in worker_chunks if chunk]
+    worker_items = [
+        {
+            "worker_label": f"サブエージェント {index + 1}",
+            "account_name": f"サブエージェント {index + 1}",
+            "kind": "image-validation",
+            "label": f"{len(chunk)}件担当",
+            "status": "queued",
+            "phase": "待機中",
+            "progress": 0,
+            "done": 0,
+            "total": len(chunk),
+            "current": "",
+            "targets": [
+                {
+                    "account_name": str(target["account_name"]),
+                    "kind": str(target["kind"]),
+                    "label": str(target["label"]),
+                    "status": "queued",
+                    "phase": "待機中",
+                    "progress": 0,
+                }
+                for target in chunk
+            ],
+        }
+        for index, chunk in enumerate(worker_chunks)
+    ]
+    worker_lock = threading.Lock()
+
+    def update_validation_workers() -> None:
+        running = sum(1 for item in worker_items if item.get("status") == "running")
+        done = sum(1 for item in worker_items if item.get("status") == "done")
+        failed = sum(1 for item in worker_items if item.get("status") == "failed")
+        update_job(
+            job_id,
+            worker_total=len(worker_items),
+            worker_running=running,
+            worker_done=done,
+            worker_failed=failed,
+            worker_items=clone_worker_items(worker_items),
+        )
+
+    def run_validation_worker(worker_index: int, chunk: list[dict[str, Any]]) -> None:
+        nonlocal suspect_count, done_count
+        worker_item = worker_items[worker_index]
+        with worker_lock:
+            worker_item.update({"status": "running", "phase": "検証中", "progress": 0})
+            update_validation_workers()
+
+        failed_in_worker = 0
+        for target_index, target in enumerate(chunk):
             label = f"{target['account_name']} / {target['label']}"
-            update_job(
-                job_id,
-                account_name=target["account_name"],
-                kind=target["kind"],
-                label=target["label"],
-                phase=f"{label} を検証中",
-                progress=max(5, int((index - 1) / len(targets) * 92)),
-                validation_done=index - 1,
-            )
+            with worker_lock:
+                worker_item["current"] = str(target["label"])
+                worker_item["phase"] = f"{target['label']} を検証中"
+                worker_item["progress"] = int((target_index / max(1, len(chunk))) * 100)
+                worker_item["targets"][target_index].update({"status": "running", "phase": "検証中", "progress": 20})
+                update_validation_workers()
+
             result = validate_image_with_codex(target)
-            if result.get("status") in {"suspect", "error"}:
-                suspect_count += 1
             save_validation_result(target["account_name"], target["kind"], result)
-            update_job(
-                job_id,
-                progress=max(8, int(index / len(targets) * 96)),
-                validation_done=index,
-                suspect_count=suspect_count,
-                phase=f"{label} の検証完了",
+            item_failed = result.get("status") in {"error"}
+
+            with worker_lock:
+                if item_failed:
+                    failed_in_worker += 1
+                worker_item["targets"][target_index].update(
+                    {
+                        "status": "failed" if item_failed else "done",
+                        "phase": str(result.get("summary") or "検証完了")[:80],
+                        "progress": 100,
+                    }
+                )
+                worker_item["done"] = int(worker_item.get("done") or 0) + 1
+                worker_item["progress"] = int((int(worker_item["done"]) / max(1, int(worker_item["total"]))) * 100)
+                worker_item["phase"] = f"{worker_item['done']}/{worker_item['total']}件完了"
+                done_count += 1
+                if result.get("status") in {"suspect", "error"}:
+                    suspect_count += 1
+                update_validation_workers()
+                update_job(
+                    job_id,
+                    account_name=target["account_name"],
+                    kind=target["kind"],
+                    label=target["label"],
+                    progress=max(8, int(done_count / len(targets) * 96)),
+                    validation_done=done_count,
+                    suspect_count=suspect_count,
+                    phase=f"{label} の検証完了 ({done_count}/{len(targets)})",
+                )
+            append_job_output(job_id, f"\n[image-validate] {label}: {result.get('status')} / {result.get('summary')}\n")
+
+        with worker_lock:
+            worker_item.update(
+                {
+                    "status": "failed" if failed_in_worker else "done",
+                    "phase": "完了" if not failed_in_worker else f"完了 / エラー {failed_in_worker}件",
+                    "progress": 100,
+                    "current": "",
+                    "failed_count": failed_in_worker,
+                }
             )
+            update_validation_workers()
+
+    try:
+        update_job(
+            job_id,
+            phase=f"画像検証中 / {max_workers}並列",
+            progress=5,
+            worker_total=len(worker_items),
+            worker_items=clone_worker_items(worker_items),
+        )
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jmty-image-validate") as executor:
+            futures = [executor.submit(run_validation_worker, index, chunk) for index, chunk in enumerate(worker_chunks)]
+            for future in as_completed(futures):
+                future.result()
         update_job(
             job_id,
             status="done",
@@ -4004,8 +4821,16 @@ def run_image_validation_job(job_id: str, targets: list[dict[str, Any]]) -> None
             phase=f"検証完了 / 要確認 {suspect_count}件",
             finished_at=display_time(),
             suspect_count=suspect_count,
+            worker_running=0,
+            worker_done=len(worker_items),
+            worker_failed=sum(1 for item in worker_items if item.get("status") == "failed"),
+            worker_items=clone_worker_items(worker_items),
         )
     except Exception as exc:
+        with worker_lock:
+            for item in worker_items:
+                if item.get("status") == "running":
+                    item.update({"status": "failed", "phase": "検証失敗", "progress": 100})
         update_job(
             job_id,
             status="failed",
@@ -4014,6 +4839,7 @@ def run_image_validation_job(job_id: str, targets: list[dict[str, Any]]) -> None
             stderr=str(exc),
             finished_at=display_time(),
             suspect_count=suspect_count,
+            worker_items=clone_worker_items(worker_items),
         )
 
 
@@ -4330,12 +5156,16 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                     job = start_weekly_bulk_job(self.output_root, self.templates_dir)
                 elif command == "weekly-bulk-resume":
                     job = start_weekly_bulk_job(self.output_root, self.templates_dir, resume=True)
+                elif command.startswith("weekly-phase-"):
+                    job = start_weekly_phase_job(self.output_root, self.templates_dir, command.removeprefix("weekly-phase-"))
                 else:
                     job = start_job(command, self.output_root, self.templates_dir, payload)
                 self.send_json({"ok": True, "job": job.__dict__})
             elif parsed.path == "/api/gws/auth/login":
                 job = start_gws_auth_login()
                 self.send_json({"ok": True, "job": job.__dict__})
+            elif parsed.path == "/api/task-board/refresh":
+                self.send_json({"ok": True, "task_board": task_board_state(force=True)})
             elif parsed.path == "/api/post":
                 self.send_json({"ok": True, "result": save_post(self.output_root, payload)})
             elif parsed.path == "/api/post/sheet-sync":
@@ -4348,6 +5178,9 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "result": save_template(self.templates_dir, payload)})
             elif parsed.path == "/api/template/delete":
                 self.send_json({"ok": True, "result": delete_template(self.templates_dir, payload)})
+            elif parsed.path == "/api/template/ai-generate":
+                job = start_ai_template_generation(self.templates_dir, payload)
+                self.send_json({"ok": True, "job": job.__dict__})
             elif parsed.path == "/api/template/preview-generate":
                 job = start_template_preview_generation(self.templates_dir, payload)
                 self.send_json({"ok": True, "job": job.__dict__})
@@ -4467,6 +5300,7 @@ INDEX_HTML = r"""<!doctype html>
       --state-hover: rgba(11, 87, 208, .08);
       --shadow: 0 16px 36px rgba(31, 41, 55, .10);
       --shadow-small: 0 2px 10px rgba(31, 41, 55, .07);
+      --header-height: 66px;
     }
     * { box-sizing: border-box; }
     html {
@@ -4659,6 +5493,22 @@ INDEX_HTML = r"""<!doctype html>
       justify-content: space-between;
       padding: 12px 18px;
     }
+    .brand-area {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+    }
+    .menu-toggle {
+      background: #fff;
+      color: var(--primary);
+      box-shadow: var(--shadow-small);
+    }
+    .menu-toggle[aria-expanded="true"] {
+      background: var(--soft-blue);
+      border-color: #adc4f7;
+      color: var(--primary-strong);
+    }
     .brand {
       display: flex;
       flex-direction: column;
@@ -4686,11 +5536,61 @@ INDEX_HTML = r"""<!doctype html>
       padding: 2px 0 4px;
       scrollbar-width: thin;
     }
+    .drawer-scrim {
+      position: fixed;
+      top: var(--header-height);
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 45;
+      background: rgba(15, 23, 42, .20);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease;
+    }
+    .app-drawer {
+      position: fixed;
+      top: var(--header-height);
+      bottom: 0;
+      left: 0;
+      z-index: 50;
+      width: min(304px, calc(100vw - 36px));
+      padding: 14px;
+      overflow-y: auto;
+      background: rgba(255, 255, 255, .98);
+      border-right: 1px solid var(--line);
+      box-shadow: 22px 0 44px rgba(31, 41, 55, .16);
+      transform: translateX(calc(-100% - 16px));
+      transition: transform .22s ease;
+    }
+    body.drawer-open .drawer-scrim {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    body.drawer-open .app-drawer {
+      transform: translateX(0);
+    }
+    .drawer-head {
+      display: grid;
+      gap: 2px;
+      padding: 6px 4px 14px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 12px;
+    }
+    .drawer-kicker {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .drawer-head strong {
+      font-size: 15px;
+    }
     .view-nav {
-      display: flex;
+      display: grid;
       gap: 8px;
-      overflow-x: auto;
-      padding: 0 18px 12px;
+      overflow: visible;
+      padding: 0;
       scrollbar-width: thin;
     }
     .mobile-view-switch {
@@ -4703,9 +5603,11 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--muted);
     }
     .view-tab {
-      min-height: 36px;
-      background: #fff;
-      color: var(--muted);
+      justify-content: flex-start;
+      width: 100%;
+      min-height: 44px;
+      background: transparent;
+      color: var(--text);
       font-weight: 700;
       padding-inline: 12px;
     }
@@ -4730,6 +5632,17 @@ INDEX_HTML = r"""<!doctype html>
       overflow-x: hidden;
     }
     .view-panel.active { display: grid; }
+    [data-view-panel="logs"] {
+      min-height: calc(100dvh - var(--header-height) - 36px);
+    }
+    [data-view-panel="logs"] > .panel {
+      min-height: calc(100dvh - var(--header-height) - 36px);
+      overflow: visible;
+    }
+    [data-view-panel="logs"] .job-list {
+      max-height: none;
+      overflow: visible;
+    }
     .view-layout {
       display: grid;
       gap: 16px;
@@ -5048,7 +5961,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 10px;
     }
     .metric-card {
@@ -5079,6 +5992,134 @@ INDEX_HTML = r"""<!doctype html>
     .metric-detail {
       color: var(--muted);
       font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .dashboard-hero {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #fff, #f7faff);
+      box-shadow: var(--shadow-small);
+      padding: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+      gap: 14px;
+      align-items: stretch;
+    }
+    .dashboard-hero-copy {
+      display: grid;
+      gap: 8px;
+      align-content: center;
+      min-width: 0;
+    }
+    .dashboard-hero-copy h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+    .dashboard-hero-copy p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      max-width: 72ch;
+    }
+    .dashboard-focus {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      align-content: center;
+    }
+    .dashboard-focus strong,
+    .dashboard-focus span {
+      overflow-wrap: anywhere;
+    }
+    .dashboard-focus strong {
+      font-size: 14px;
+    }
+    .dashboard-focus span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .dashboard-grid-balanced {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .dashboard-action-list,
+    .dashboard-health-list,
+    .task-board-list,
+    .dashboard-job-list {
+      display: grid;
+      gap: 8px;
+    }
+    .dashboard-action,
+    .dashboard-account-row,
+    .task-board-item,
+    .dashboard-job-row {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .dashboard-action {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    .dashboard-action-text,
+    .dashboard-account-main,
+    .task-board-main,
+    .dashboard-job-main {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .dashboard-action-text strong,
+    .dashboard-account-main strong,
+    .task-board-main strong,
+    .dashboard-job-main strong {
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .dashboard-action-text span,
+    .dashboard-account-main span,
+    .task-board-main span,
+    .dashboard-job-main span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .dashboard-account-row,
+    .task-board-item,
+    .dashboard-job-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    .dashboard-account-badges,
+    .task-board-badges,
+    .dashboard-job-badges {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: center;
+    }
+    .task-board-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
       overflow-wrap: anywhere;
     }
     .route-grid {
@@ -5141,7 +6182,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .weekly-bulk-steps {
       display: grid;
-      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 8px;
     }
     .weekly-bulk-step {
@@ -5150,17 +6191,26 @@ INDEX_HTML = r"""<!doctype html>
       border-radius: 8px;
       background: #fff;
       padding: 10px;
-      display: grid;
-      gap: 4px;
-      align-content: start;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 116px;
     }
     .weekly-bulk-step strong {
       font-size: 12px;
       overflow-wrap: anywhere;
     }
-    .weekly-bulk-step span {
+    .weekly-step-status {
       color: var(--muted);
       font-size: 11px;
+    }
+    .weekly-step-run {
+      width: 100%;
+      min-width: 0;
+      margin-top: auto;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
     }
     .weekly-bulk-step.done {
       border-color: #bad8c8;
@@ -5174,6 +6224,119 @@ INDEX_HTML = r"""<!doctype html>
     .weekly-bulk-step.fail {
       border-color: #efb5ad;
       background: var(--soft-red);
+    }
+    .worker-lanes {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+    }
+    .parallel-progress-board {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .parallel-progress-head,
+    .worker-lane-head,
+    .progress-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+    .parallel-progress-head strong,
+    .progress-label-row strong {
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .parallel-progress-head span,
+    .progress-label-row span {
+      color: var(--muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .worker-lane {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 9px;
+      display: grid;
+      gap: 5px;
+    }
+    .worker-lane.running {
+      border-color: #b9d0f5;
+      background: var(--soft-blue);
+    }
+    .worker-lane.done {
+      border-color: #bad8c8;
+      background: var(--soft-green);
+    }
+    .worker-lane.failed {
+      border-color: #efb5ad;
+      background: var(--soft-red);
+    }
+    .worker-lane-head strong {
+      min-width: 0;
+    }
+    .worker-lane-count {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .worker-target-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-height: 22px;
+    }
+    .worker-target-pill {
+      max-width: 100%;
+      min-height: 22px;
+      padding: 3px 6px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-size: 10px;
+      overflow-wrap: anywhere;
+    }
+    .worker-target-pill.done {
+      border-color: #bad8c8;
+      background: var(--soft-green);
+      color: #1f5134;
+    }
+    .worker-target-pill.running {
+      border-color: #b9d0f5;
+      background: var(--soft-blue);
+      color: #234c87;
+    }
+    .worker-target-pill.failed {
+      border-color: #efb5ad;
+      background: var(--soft-red);
+      color: #7d2b22;
+    }
+    .worker-lane strong,
+    .worker-lane span {
+      overflow-wrap: anywhere;
+    }
+    .worker-lane strong {
+      font-size: 12px;
+    }
+    .worker-lane span {
+      color: var(--muted);
+      font-size: 11px;
     }
     .workspace {
       display: grid;
@@ -5194,6 +6357,7 @@ INDEX_HTML = r"""<!doctype html>
       gap: 0;
       background: var(--surface-soft);
       border-bottom: 1px solid var(--line);
+      --slot-validation-min-height: 0px;
     }
     .account-name {
       padding: 12px;
@@ -5210,11 +6374,13 @@ INDEX_HTML = r"""<!doctype html>
     }
     .slot {
       min-width: 0;
+      height: 100%;
       padding: 12px;
       border-right: 1px solid var(--line);
       display: grid;
-      grid-template-rows: auto auto minmax(22px, auto) auto auto auto;
+      grid-template-rows: auto auto minmax(22px, auto) auto minmax(var(--slot-validation-min-height), auto) auto;
       gap: 8px;
+      align-content: start;
       background: #fff;
       border-top: 3px solid transparent;
     }
@@ -5253,6 +6419,7 @@ INDEX_HTML = r"""<!doctype html>
     .slot-media {
       position: relative;
       min-width: 0;
+      aspect-ratio: 1 / 1;
       isolation: isolate;
     }
     .slot-media.has-image::after {
@@ -5287,6 +6454,7 @@ INDEX_HTML = r"""<!doctype html>
     .pill.none { background: #f2f3f0; color: var(--muted); }
     .thumb {
       width: 100%;
+      height: 100%;
       aspect-ratio: 1 / 1;
       border: 1px solid var(--line);
       border-radius: 7px;
@@ -5442,6 +6610,14 @@ INDEX_HTML = r"""<!doctype html>
       background: var(--surface-soft);
       font-size: 12px;
       min-width: 0;
+      min-height: var(--slot-validation-min-height);
+    }
+    .validation-result.is-empty {
+      visibility: hidden;
+      padding: 0;
+      border-color: transparent;
+      background: transparent;
+      color: transparent;
     }
     .validation-result.suspect, .validation-result.error {
       border-color: #efb5ad;
@@ -5546,6 +6722,20 @@ INDEX_HTML = r"""<!doctype html>
       grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(150px, 190px) auto;
       gap: 10px;
       align-items: end;
+    }
+    .ai-template-generator {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow-small);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: minmax(130px, 180px) minmax(240px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .ai-template-generator button {
+      min-width: 180px;
     }
     .image-rules-editor,
     .post-rules-editor,
@@ -5726,6 +6916,8 @@ INDEX_HTML = r"""<!doctype html>
       margin-top: 10px;
       border-top: 1px dashed var(--line);
       padding-top: 10px;
+      cursor: default;
+      user-select: text;
     }
     .job-item.expanded {
       background: #fcfdfe;
@@ -5735,17 +6927,18 @@ INDEX_HTML = r"""<!doctype html>
       display: block;
     }
     .job-item .code {
-      max-height: 150px;
+      max-height: 180px;
       overflow-y: auto;
       font-size: 11px;
       background: #f1f5f9;
       padding: 10px;
       border-radius: 4px;
       white-space: pre-wrap;
+      user-select: text;
       transition: max-height 0.3s ease;
     }
     .job-item.expanded .code {
-      max-height: calc(100dvh - 350px);
+      max-height: clamp(420px, calc(100dvh - var(--header-height) - 210px), 920px);
     }
     .job-expand-hint {
       font-size: 10px;
@@ -6854,6 +8047,11 @@ INDEX_HTML = r"""<!doctype html>
       .view-two-column { grid-template-columns: 1fr; }
       .side { position: static; max-height: none; overflow: visible; padding-right: 0; }
       .summary-grid { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+      .dashboard-hero,
+      .dashboard-grid,
+      .dashboard-grid-balanced {
+        grid-template-columns: 1fr;
+      }
       .route-grid { grid-template-columns: repeat(2, minmax(170px, 1fr)); }
       .weekly-bulk-steps { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
       .region-board-toolbar { grid-template-columns: 1fr 1fr; }
@@ -6897,8 +8095,18 @@ INDEX_HTML = r"""<!doctype html>
       .icon-button { width: 44px; min-width: 44px; }
       .meta { max-width: 100%; }
       main { padding: 10px; }
-      .view-nav { padding: 0 10px 10px; }
       .summary-grid, .route-grid, .account-toolbar, .region-board-toolbar { grid-template-columns: 1fr; }
+      .dashboard-action,
+      .dashboard-account-row,
+      .task-board-item,
+      .dashboard-job-row {
+        grid-template-columns: 1fr;
+      }
+      .dashboard-account-badges,
+      .task-board-badges,
+      .dashboard-job-badges {
+        justify-content: flex-start;
+      }
       .weekly-bulk-steps { grid-template-columns: 1fr; }
       .quick-item { align-items: stretch; flex-direction: column; }
       .slot { grid-template-columns: 1fr; }
@@ -6918,6 +8126,7 @@ INDEX_HTML = r"""<!doctype html>
       .sample-manager-tab { flex: 1; }
       .template-upload-grid { grid-template-columns: 1fr; }
       .template-manager-toolbar { grid-template-columns: 1fr; }
+      .ai-template-generator { grid-template-columns: 1fr; }
       .template-manager-gallery { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
       .post-account-summary {
         grid-template-columns: 1fr 38px;
@@ -7104,9 +8313,19 @@ INDEX_HTML = r"""<!doctype html>
       main {
         padding: 10px;
       }
+      [data-view-panel="logs"],
+      [data-view-panel="logs"] > .panel {
+        min-height: calc(100dvh - var(--header-height) - 20px);
+      }
+      .job-item.expanded .code {
+        max-height: clamp(320px, calc(100dvh - var(--header-height) - 180px), 720px);
+      }
       .bar {
         padding: 10px;
         gap: 10px;
+      }
+      .brand-area {
+        width: 100%;
       }
       .brand {
         min-width: 0;
@@ -7114,21 +8333,19 @@ INDEX_HTML = r"""<!doctype html>
       }
       .actions {
         width: 100%;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        overflow-x: visible;
+        display: flex;
+        overflow-x: auto;
       }
       .actions button,
       .actions .pill {
-        width: 100%;
-        min-width: 0;
+        width: auto;
+        min-width: max-content;
       }
-      .view-nav {
-        display: none;
+      .actions button {
+        white-space: nowrap;
       }
       .mobile-view-switch {
-        display: block;
-        padding: 0 10px 10px;
+        display: none;
       }
       .panel {
         border-radius: 10px;
@@ -7354,9 +8571,12 @@ INDEX_HTML = r"""<!doctype html>
   <div class="app">
     <header>
       <div class="bar">
-        <div class="brand">
-          <h1>JMTY GUI</h1>
-          <div class="meta" id="meta">読み込み中</div>
+        <div class="brand-area">
+          <button class="icon-button menu-toggle" id="nav-toggle" data-icon="menu" aria-label="画面メニューを開く" aria-controls="app-drawer" aria-expanded="false" title="画面メニュー"></button>
+          <div class="brand">
+            <h1>JMTY GUI</h1>
+            <div class="meta" id="meta">読み込み中</div>
+          </div>
         </div>
         <div class="actions">
           <span class="pill none" id="gws-auth-status">gws確認中</span>
@@ -7365,6 +8585,13 @@ INDEX_HTML = r"""<!doctype html>
           <button class="sheet-open-button subtle" id="gws-auth-open" data-icon="open_in_new" hidden>認証タブを開く</button>
           <button class="ghost" id="refresh" data-icon="refresh">更新</button>
         </div>
+      </div>
+    </header>
+    <div class="drawer-scrim" id="drawer-scrim" aria-hidden="true"></div>
+    <aside class="app-drawer" id="app-drawer" aria-label="画面切り替え" aria-hidden="true">
+      <div class="drawer-head">
+        <span class="drawer-kicker">画面切替</span>
+        <strong id="drawer-current-view">ダッシュボード</strong>
       </div>
       <nav class="view-nav" aria-label="画面切り替え">
         <button class="view-tab" data-view="dashboard" data-icon="dashboard" aria-selected="true">ダッシュボード</button>
@@ -7375,54 +8602,75 @@ INDEX_HTML = r"""<!doctype html>
         <button class="view-tab" data-view="logs" data-icon="terminal" aria-selected="false">実行ログ</button>
         <button class="view-tab" data-view="project-samples" data-icon="inventory_2" aria-selected="false">見本管理</button>
       </nav>
-      <div class="mobile-view-switch">
-        <label>画面切替
-          <select id="mobile-view-select" aria-label="画面切替">
-            <option value="dashboard">ダッシュボード</option>
-            <option value="posts">投稿文管理</option>
-            <option value="rotation">地域・ローテーション</option>
-            <option value="images">画像生成</option>
-            <option value="prompts">画像プロンプト管理</option>
-            <option value="logs">実行ログ</option>
-            <option value="project-samples">見本管理</option>
-          </select>
-        </label>
-      </div>
-    </header>
+    </aside>
     <main id="content">
       <section class="view-panel active" data-view-panel="dashboard">
+        <section class="dashboard-hero" aria-label="ダッシュボード概要">
+          <div class="dashboard-hero-copy">
+            <h2>今日の運用状況</h2>
+            <p>週次処理の進行、未対応の画像・投稿文、Task Board の改善予定をここで確認します。</p>
+          </div>
+          <div class="dashboard-focus" id="dashboard-focus"></div>
+        </section>
         <section class="summary-grid" id="summary-cards" aria-label="進行状況"></section>
-        <section class="panel">
-          <div class="panel-head">
-            <div class="panel-title-block">
-              <h2 class="panel-title">週次一括実行</h2>
-              <p class="panel-subtitle">ローテーション、投稿文、画像、Drive、スプレッドシートをまとめて実行します。</p>
+        <div class="dashboard-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <div class="panel-title-block">
+                <h2 class="panel-title">週次一括実行</h2>
+                <p class="panel-subtitle">ローテーション、投稿文、画像、Drive、スプレッドシートをまとめて実行します。</p>
+              </div>
+              <div class="panel-actions">
+                <button class="danger" data-command="weekly-bulk" data-icon="play_arrow">週次一括実行</button>
+                <button class="blue" data-command="weekly-bulk-resume" data-icon="resume">途中から再実行</button>
+              </div>
             </div>
-            <div class="panel-actions">
-              <button class="danger" data-command="weekly-bulk" data-icon="play_arrow">週次一括実行</button>
-              <button class="blue" data-command="weekly-bulk-resume" data-icon="resume">途中から再実行</button>
+            <div class="panel-body">
+              <div class="weekly-bulk-status" id="weekly-bulk-status"></div>
             </div>
-          </div>
-          <div class="panel-body">
-            <div class="weekly-bulk-status" id="weekly-bulk-status"></div>
-          </div>
-        </section>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">優先アクション</h2>
+              <span class="pill" id="dashboard-next-state">確認中</span>
+            </div>
+            <div class="panel-body">
+              <div class="dashboard-action-list" id="dashboard-next"></div>
+            </div>
+          </section>
+        </div>
+        <div class="dashboard-grid dashboard-grid-balanced">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">アカウント別注意</h2>
+              <span class="pill" id="dashboard-account-state">確認中</span>
+            </div>
+            <div class="panel-body">
+              <div class="dashboard-health-list" id="dashboard-account-health"></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <div class="panel-title-block">
+                <h2 class="panel-title">改善予定</h2>
+                <p class="panel-subtitle" id="task-board-meta">Task Board 同期中</p>
+              </div>
+              <div class="panel-actions">
+                <button id="task-board-refresh" data-icon="sync">同期</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="task-board-list" id="task-board-items"></div>
+            </div>
+          </section>
+        </div>
         <section class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">目的別メニュー</h2>
-            <span class="pill">必要な画面だけ表示</span>
+            <h2 class="panel-title">最近の実行</h2>
+            <button onclick='setView("logs")' data-icon="terminal">ログを見る</button>
           </div>
           <div class="panel-body">
-            <div class="route-grid" id="dashboard-menu"></div>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2 class="panel-title">次に見るところ</h2>
-            <span class="pill" id="dashboard-next-state">確認中</span>
-          </div>
-          <div class="panel-body">
-            <div class="quick-list" id="dashboard-next"></div>
+            <div class="dashboard-job-list" id="dashboard-jobs"></div>
           </div>
         </section>
       </section>
@@ -7434,6 +8682,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="panel-actions">
               <span class="pill" id="sheet-state">未読込</span>
               <button id="sync-dirty-posts" data-icon="cloud_upload">未反映をスプレッドシートに反映</button>
+              <button class="warn" id="generate-failed-validation-posts" data-icon="auto_fix_high">検証NGだけAI再作成</button>
               <button class="primary" id="generate-all-posts" data-icon="edit_note">投稿文一括AI再作成</button>
               <button class="primary" id="reload-sheet" data-icon="cloud_sync">シート読込</button>
               <button id="open-basic-settings-inline" data-icon="settings">基本情報設定</button>
@@ -7598,9 +8847,9 @@ INDEX_HTML = r"""<!doctype html>
                   <span class="pill" id="task-count">0件</span>
                   <span class="pill" id="account-result-count">0件表示</span>
                   <button class="primary" id="generate-all-images" data-icon="auto_awesome">画像一括生成</button>
-                  <button id="validate-all-images" data-icon="rule">画像一括検証</button>
+                  <button id="validate-all-checks" data-icon="rule">一括検証</button>
+                  <button class="warn" id="regenerate-failed-validation-posts" data-icon="auto_fix_high">NG投稿文再作成</button>
                   <button class="blue" data-command="sync-drive" data-icon="cloud_upload">Driveへ反映</button>
-                  <button data-command="validate-sheet-posts" data-icon="fact_check">投稿文整合性検証</button>
                   <button class="primary" data-command="sync-sheet" data-icon="cloud_sync">スプレッドシートに反映</button>
                 </div>
               </div>
@@ -7671,6 +8920,19 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
           <div class="panel-body form-grid">
+            <div class="ai-template-generator">
+              <label>種別
+                <select id="ai-template-kind">
+                  <option value="common">共通</option>
+                  <option value="factory">工場</option>
+                  <option value="remote">在宅</option>
+                </select>
+              </label>
+              <label>AIテンプレ指示
+                <input id="ai-template-instruction" placeholder="例: 少年漫画雑誌風。集中線、太字、勢いのある求人バナー">
+              </label>
+              <button class="primary" id="ai-template-generate" data-icon="auto_awesome">AIテンプレ＋見本生成</button>
+            </div>
             <details class="image-rules-editor responsive-disclosure" id="image-rules-disclosure">
               <summary class="responsive-disclosure-summary">
                 <div>
@@ -7850,13 +9112,13 @@ INDEX_HTML = r"""<!doctype html>
         </label>
         <div class="template-upload-grid">
           <label class="upload-card">
-            <span>参考画像からプロンプト作成</span>
-            <small>画像は生成せず、参考画像の雰囲気を文章の画風プロンプトにします。</small>
+            <span>見本画像からプロンプト作成</span>
+            <small>画像をそのままサムネイル登録し、雰囲気だけを文章の画風プロンプトにします。</small>
             <input id="template-reference" type="file" accept="image/*">
           </label>
           <label class="upload-card">
             <span>サムネイル上書き</span>
-            <small>一覧に出す画像だけを手動指定したい場合に使います。</small>
+            <small>一覧に出す画像を手動指定します。プロンプト未入力なら、この画像から文章も作ります。</small>
             <input id="template-preview" type="file" accept="image/*">
           </label>
         </div>
@@ -7964,6 +9226,7 @@ INDEX_HTML = r"""<!doctype html>
       expandedJobs: {},
       currentPostStyleSample: null,
       currentView: "dashboard",
+      drawerOpen: false,
       rotation: { field: "factory_region", pending: {}, draggingRow: null },
       filters: { accountQuery: "", accountStatus: "all", accountSort: "needs" },
       templateFilters: { query: "", kind: "all", preview: "all" },
@@ -8021,6 +9284,12 @@ INDEX_HTML = r"""<!doctype html>
       "rotate-sheet": "ローテーションをスプレッドシートに反映",
       "weekly-bulk": "週次一括実行",
       "weekly-bulk-resume": "途中から再実行",
+      "weekly-phase-rotate": "地域ローテーションだけ実行",
+      "weekly-phase-posts": "投稿文AI再作成だけ実行",
+      "weekly-phase-images": "画像全員分生成だけ実行",
+      "weekly-phase-drive": "Drive反映だけ実行",
+      "weekly-phase-sheet": "スプレッドシート反映だけ実行",
+      "weekly-phase-sheet_validate": "投稿文整合性検証だけ実行",
       "sync-drive": "Driveへ反映",
       "sync-sheet": "スプレッドシートに反映",
       "validate-output": "検証",
@@ -8031,26 +9300,64 @@ INDEX_HTML = r"""<!doctype html>
       "image-validate-all": "画像一括検証",
       "post-generate": "投稿文AI再作成",
       "post-rewrite": "AIリライト",
+      "template-ai-generate": "AIテンプレ作成",
       "template-preview-generate": "画風見本生成",
     };
     const commandConfirmations = {
       "rotate-sheet": "ローテーション結果をスプレッドシートに反映します。Google Sheets の地域割り振りを1つずつずらします。続行しますか？",
       "weekly-bulk": "週次一括実行を開始します。地域と投稿文のローテーション反映、投稿文AI再作成、全員分の画像生成、Drive反映、スプレッドシート反映、投稿文整合性検証を順番に実行します。長時間かかります。続行しますか？",
       "weekly-bulk-resume": "途中から再実行します。地域ローテーションと投稿文再作成はスキップし、生成済み画像を飛ばして未生成画像、Drive反映、スプレッドシート反映、投稿文整合性検証を実行します。続行しますか？",
+      "weekly-phase-rotate": "地域ローテーションだけを実行します。Google Sheets の地域割り振りを1つずつずらします。続行しますか？",
+      "weekly-phase-posts": "投稿文AI再作成だけを実行します。全アカウントの投稿文ファイルを生成結果で更新します。続行しますか？",
+      "weekly-phase-images": "画像全員分生成だけを実行します。既存画像も含めて対象投稿の画像生成を実行します。続行しますか？",
+      "weekly-phase-drive": "Drive反映だけを実行します。Google Drive のアカウント別フォルダへ画像・投稿文・プロンプトを送ります。続行しますか？",
+      "weekly-phase-sheet": "スプレッドシート反映だけを実行します。ローカル投稿文とDrive画像URLをGoogle Sheetsへ送ります。続行しますか？",
+      "weekly-phase-sheet_validate": "投稿文整合性検証だけを実行します。ズレがあれば既存の週次一括と同じく修正反映も行います。続行しますか？",
       "sync-drive": "Driveへ反映します。Google Drive のアカウント別フォルダへ画像・投稿文・プロンプトを送ります。スプレッドシートは更新しません。続行しますか？",
       "sync-sheet": "スプレッドシートに反映します。ローカル投稿文とDrive画像URLをGoogle Sheetsへ送ります。続行しますか？",
       "validate-sheet-posts": "スプレッドシートの画像条件と投稿文を照合します。通常実行は修正対象一覧のみを出します。続行しますか？",
     };
     const weeklyBulkSteps = [
-      { key: "rotate", label: "地域ローテーション" },
-      { key: "posts", label: "投稿文AI再作成" },
-      { key: "images", label: "画像全員分生成" },
-      { key: "drive", label: "Drive反映" },
-      { key: "sheet", label: "スプレッドシート反映" },
-      { key: "sheet_validate", label: "投稿文整合性検証" },
+      { key: "rotate", label: "地域ローテーション", command: "weekly-phase-rotate" },
+      { key: "posts", label: "投稿文AI再作成", command: "weekly-phase-posts" },
+      { key: "images", label: "画像全員分生成", command: "weekly-phase-images" },
+      { key: "drive", label: "Drive反映", command: "weekly-phase-drive" },
+      { key: "sheet", label: "スプレッドシート反映", command: "weekly-phase-sheet" },
+      { key: "sheet_validate", label: "投稿文整合性検証", command: "weekly-phase-sheet_validate" },
     ];
 
+    function weeklyPhaseCommand(key) {
+      return `weekly-phase-${key}`;
+    }
+
+    function isWeeklyJob(job) {
+      const command = String(job?.command || "");
+      return command === "weekly-bulk" || command === "weekly-bulk-resume" || command.startsWith("weekly-phase-");
+    }
+
     const $ = (id) => document.getElementById(id);
+
+    function syncHeaderHeight() {
+      const header = document.querySelector("header");
+      if (!header) return;
+      document.documentElement.style.setProperty("--header-height", `${Math.ceil(header.getBoundingClientRect().height)}px`);
+    }
+
+    function setDrawerOpen(open) {
+      state.drawerOpen = Boolean(open);
+      document.body.classList.toggle("drawer-open", state.drawerOpen);
+      const toggle = $("nav-toggle");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", state.drawerOpen ? "true" : "false");
+        toggle.setAttribute("aria-label", state.drawerOpen ? "画面メニューを閉じる" : "画面メニューを開く");
+        toggle.dataset.icon = state.drawerOpen ? "menu_open" : "menu";
+      }
+      $("app-drawer")?.setAttribute("aria-hidden", state.drawerOpen ? "false" : "true");
+    }
+
+    function toggleDrawer() {
+      setDrawerOpen(!state.drawerOpen);
+    }
 
     function toast(message, isError = false) {
       const el = $("toast");
@@ -8092,7 +9399,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function isGenerationJob(job) {
-      return ["image-generate", "template-preview-generate", "post-rewrite", "post-generate"].includes(job.command);
+      return ["image-generate", "template-ai-generate", "template-preview-generate", "post-rewrite", "post-generate"].includes(job.command);
     }
 
     function generationJobLabel(job) {
@@ -8101,6 +9408,9 @@ INDEX_HTML = r"""<!doctype html>
       }
       if (job.command === "template-preview-generate") {
         return `${job.template_name || "テンプレ"} / 見本`;
+      }
+      if (job.command === "template-ai-generate") {
+        return `${job.template_name || "AIテンプレ"} / 作成`;
       }
       if (job.command === "post-rewrite") {
         return `${job.account_name || "アカウント"} / ${job.label || "投稿文"}`;
@@ -8212,20 +9522,6 @@ INDEX_HTML = r"""<!doctype html>
       return `${spreadsheetBaseUrl}?gid=${spreadsheetGid}${hash}`;
     }
 
-    function sheetRowRange(rowNumber) {
-      const row = Number(rowNumber || 0);
-      return row > 0 ? `A${row}` : "";
-    }
-
-    function slotSheetRange(account, slot) {
-      if (!slot || slot.empty) return sheetRowRange(account?.row_idx);
-      if (slot.post_sync_cell) return slot.post_sync_cell;
-      if (slot.post_sync_column && (slot.row_idx || account?.row_idx)) {
-        return `${slot.post_sync_column}${slot.row_idx || account.row_idx}`;
-      }
-      return sheetRowRange(slot.row_idx || account?.row_idx);
-    }
-
     function openSpreadsheet(range = "", event = null) {
       if (event?.stopPropagation) event.stopPropagation();
       window.open(spreadsheetUrl(range), "_blank", "noopener,noreferrer");
@@ -8241,7 +9537,7 @@ INDEX_HTML = r"""<!doctype html>
 
     function slotStatus(slot) {
       if (slot.empty) return "none";
-      if (slot.approved) return "ok";
+      if (validationIsAccepted(slot)) return "ok";
       if (slot.image_exists) return "wait";
       return "missing";
     }
@@ -8251,6 +9547,19 @@ INDEX_HTML = r"""<!doctype html>
       return state.data.accounts.flatMap((account) =>
         visibleSlots(account)
           .filter((slot) => !slot.empty && !slot.image_exists)
+          .map((slot) => ({
+            accountName: account.account_name,
+            kind: slot.kind,
+            label: slot.label,
+          }))
+      );
+    }
+
+    function failedValidationPostTargets() {
+      if (!state.data?.accounts) return [];
+      return state.data.accounts.flatMap((account) =>
+        visibleSlots(account)
+          .filter((slot) => !slot.empty && validationIsSuspect(slot))
           .map((slot) => ({
             accountName: account.account_name,
             kind: slot.kind,
@@ -8312,6 +9621,13 @@ INDEX_HTML = r"""<!doctype html>
       return ["suspect", "error"].includes(validationStatus(slot));
     }
 
+    function validationResolvedLabel(slot) {
+      const status = validationStatus(slot);
+      if (status === "ok") return "検証OK";
+      if (status === "acknowledged") return "確認済み";
+      return "";
+    }
+
     function validationIsAccepted(slot) {
       return ["ok", "acknowledged"].includes(validationStatus(slot)) || Boolean(slot.approved);
     }
@@ -8339,20 +9655,26 @@ INDEX_HTML = r"""<!doctype html>
       );
     }
 
-    function activePostGenerateJob(accountName, kind) {
+    function activePostGenerateJob(accountName, kind, slot = null) {
       return (state.data?.jobs || []).find((job) =>
         job.command === "post-generate" &&
         job.status === "running" &&
-        (job.kind === "all" || (job.account_name === accountName && job.kind === kind))
+        (
+          job.kind === "all" ||
+          (job.kind === "validation_failed" && slot && validationIsSuspect(slot)) ||
+          (job.account_name === accountName && job.kind === kind)
+        )
       );
     }
 
     function activeValidationJob(accountName, kind) {
       return (state.data?.jobs || []).find((job) =>
         ["image-validate", "image-validate-all"].includes(job.command) &&
-        job.account_name === accountName &&
-        job.kind === kind &&
-        job.status === "running"
+        job.status === "running" &&
+        (
+          (job.account_name === accountName && job.kind === kind) ||
+          (job.worker_items || []).some((item) => item.account_name === accountName && item.kind === kind && ["queued", "running"].includes(item.status))
+        )
       );
     }
 
@@ -8391,7 +9713,10 @@ INDEX_HTML = r"""<!doctype html>
       const validation = slot.validation || { status: "unverified", label: "未検証" };
       const status = validation.status || "unverified";
       if (status === "unverified") {
-        return "";
+        return `<div class="validation-result is-empty" aria-hidden="true"></div>`;
+      }
+      if (["ok", "acknowledged"].includes(status)) {
+        return `<div class="validation-result is-empty" aria-hidden="true"></div>`;
       }
       const issues = Array.isArray(validation.issues) ? validation.issues : [];
       const issueList = issues.length
@@ -8468,9 +9793,14 @@ INDEX_HTML = r"""<!doctype html>
       document.querySelectorAll("[data-view]").forEach((button) => {
         button.setAttribute("aria-selected", button.dataset.view === state.currentView ? "true" : "false");
       });
+      const activeButton = Array.from(document.querySelectorAll("[data-view]")).find((button) => button.dataset.view === state.currentView);
+      if ($("drawer-current-view")) {
+        $("drawer-current-view").textContent = activeButton?.textContent?.trim() || state.currentView;
+      }
       if ($("mobile-view-select")) {
         $("mobile-view-select").value = state.currentView;
       }
+      requestAnimationFrame(syncHeaderHeight);
     }
 
     function renderSummary(data) {
@@ -8505,88 +9835,257 @@ INDEX_HTML = r"""<!doctype html>
       const suspect = slots.filter(validationIsSuspect).length;
       const missingTemplatePreviews = data.templates.filter((item) => !item.preview_url).length;
       const running = data.jobs.find((job) => job.status === "running");
-      const lastJob = data.jobs[0];
       const syncSummary = data.post_sync_summary || { loaded: false, dirty_count: 0 };
-      const sampleCount = (data.project_samples?.groups || []).reduce((total, group) => total + (group.files || []).length, 0);
-      const menu = [
-        {
-          view: "posts",
-          title: "投稿文管理",
-          detail: data.sheet.loaded_at ? `シート ${data.sheet.accounts.length}件 / 未反映 ${syncSummary.dirty_count || 0}件` : "投稿文作成とシート読込",
-          action: "開く",
-        },
-        {
-          view: "rotation",
-          title: "地域・ローテーション",
-          detail: "手動の地域割り当てとローテーション反映",
-          action: "開く",
-        },
-        {
-          view: "images",
-          title: "画像生成",
-          detail: `要確認 ${suspect} / 確認待ち ${waiting} / 画像なし ${missing}`,
-          action: "開く",
-        },
-        {
-          view: "prompts",
-          title: "画像プロンプト管理",
-          detail: `画風 ${data.templates.length}件 / 見本未生成 ${missingTemplatePreviews}`,
-          action: "開く",
-        },
-        {
-          view: "logs",
-          title: "実行ログ",
-          detail: running ? `${commandLabels[running.command] || running.command} 実行中` : (lastJob ? `${commandLabels[lastJob.command] || lastJob.command} / ${lastJob.status}` : "ログなし"),
-          action: "開く",
-        },
-        {
-          view: "project-samples",
-          title: "見本管理",
-          detail: `案件素材 ${sampleCount}件`,
-          action: "開く",
-        },
-      ];
-      $("dashboard-menu").innerHTML = menu.map((item) => `
-        <div class="route-card">
-          <strong>${esc(item.title)}</strong>
-          <p>${esc(item.detail)}</p>
-          <button onclick='setView(${arg(item.view)})' data-icon="open_in_new">${esc(item.action)}</button>
-        </div>
-      `).join("");
-
       const next = [];
       if (!data.sheet.loaded_at) {
-        next.push({ text: "Google Sheets の最新データを読み込む", view: "posts", action: "投稿文管理へ" });
+        next.push({ title: "Google Sheets の最新データを読み込む", detail: "投稿文・地域・未反映状態の判断に必要です。", view: "posts", action: "投稿文管理へ", tone: "wait" });
       }
       if (!data.task_count) {
-        next.push({ text: "投稿文作成を実行してタスクを作る", view: "posts", action: "投稿文管理へ" });
+        next.push({ title: "投稿文作成を実行してタスクを作る", detail: "週次一括の対象がまだありません。", view: "posts", action: "投稿文管理へ", tone: "wait" });
       }
       if (suspect || missing || waiting) {
-        next.push({ text: `画像の未対応があります: 要確認 ${suspect} / 確認待ち ${waiting} / 画像なし ${missing}`, view: "images", action: "画像生成へ" });
+        next.push({ title: "画像の未対応を片付ける", detail: `要確認 ${suspect} / 確認待ち ${waiting} / 画像なし ${missing}`, view: "images", action: "画像生成へ", tone: suspect ? "fail" : "wait" });
       }
       if (syncSummary.loaded && syncSummary.dirty_count) {
-        next.push({ text: `スプレッドシート未反映の投稿文が ${syncSummary.dirty_count}件あります`, view: "posts", action: "投稿文管理へ" });
+        next.push({ title: "投稿文をスプレッドシートへ反映する", detail: `未反映 ${syncSummary.dirty_count}件`, view: "posts", action: "投稿文管理へ", tone: "wait" });
+      }
+      if (missingTemplatePreviews) {
+        next.push({ title: "画風テンプレの見本を生成する", detail: `見本未生成 ${missingTemplatePreviews}件`, view: "prompts", action: "画像プロンプト管理へ", tone: "wait" });
       }
       if (running) {
-        next.push({ text: `${commandLabels[running.command] || running.command} が実行中です`, view: "logs", action: "ログを見る" });
+        next.push({ title: "実行中ジョブを確認する", detail: `${commandLabels[running.command] || running.command} / ${running.phase || running.status}`, view: "logs", action: "ログを見る", tone: "wait" });
       }
       if (!next.length) {
-        next.push({ text: "大きな未対応はありません。必要な画面を選んで作業できます。", view: "logs", action: "ログを見る" });
+        next.push({ title: "大きな未対応はありません", detail: "週次一括実行、個別編集、改善予定の確認に進めます。", view: "logs", action: "ログを見る", tone: "ok" });
       }
+      const focus = next[0];
+      $("dashboard-focus").innerHTML = `
+        <span class="pill ${esc(focus.tone || "")}">最優先</span>
+        <strong>${esc(focus.title)}</strong>
+        <span>${esc(focus.detail)}</span>
+        <button onclick='setView(${arg(focus.view)})' data-icon="arrow_forward">${esc(focus.action)}</button>
+      `;
       $("dashboard-next-state").textContent = next.length ? `${next.length}件` : "なし";
       $("dashboard-next").innerHTML = next.map((item) => `
-        <div class="quick-item">
-          <span>${esc(item.text)}</span>
+        <div class="dashboard-action">
+          <div class="dashboard-action-text">
+            <strong>${esc(item.title)}</strong>
+            <span>${esc(item.detail)}</span>
+          </div>
           <button onclick='setView(${arg(item.view)})' data-icon="arrow_forward">${esc(item.action)}</button>
         </div>
       `).join("");
+      renderDashboardAccountHealth(data);
+      renderTaskBoard(data.task_board || {});
+      renderDashboardJobs(data.jobs || []);
+    }
+
+    function renderDashboardAccountHealth(data) {
+      const rows = (data.accounts || []).map((account) => {
+        const slots = visibleSlots(account).filter((slot) => !slot.empty);
+        const suspect = slots.filter(validationIsSuspect).length;
+        const missing = slots.filter((slot) => slotStatus(slot) === "missing").length;
+        const waiting = slots.filter((slot) => slotStatus(slot) === "wait").length;
+        const dirty = slots.filter((slot) => ["dirty", "local_only"].includes(slot.post_sync_status || "")).length;
+        const score = suspect * 100 + missing * 20 + dirty * 10 + waiting;
+        const view = suspect || missing || waiting ? "images" : "posts";
+        return { account, suspect, missing, waiting, dirty, score, view };
+      }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score).slice(0, 6);
+
+      $("dashboard-account-state").textContent = rows.length ? `${rows.length}件` : "なし";
+      if (!rows.length) {
+        $("dashboard-account-health").innerHTML = `<div class="empty">注意が必要なアカウントはありません。</div>`;
+        return;
+      }
+      $("dashboard-account-health").innerHTML = rows.map((item) => {
+        const badges = [
+          item.suspect ? `<span class="pill fail">要確認 ${item.suspect}</span>` : "",
+          item.missing ? `<span class="pill missing">画像なし ${item.missing}</span>` : "",
+          item.waiting ? `<span class="pill wait">確認待ち ${item.waiting}</span>` : "",
+          item.dirty ? `<span class="pill wait">未反映 ${item.dirty}</span>` : "",
+        ].filter(Boolean).join("");
+        return `
+          <div class="dashboard-account-row">
+            <div class="dashboard-account-main">
+              <strong>${esc(item.account.account_name || "名称なし")}</strong>
+              <span>行 ${esc(item.account.row_idx || "-")}${item.account.account_no ? ` / No ${esc(item.account.account_no)}` : ""}</span>
+            </div>
+            <div class="dashboard-account-badges">
+              ${badges}
+              <button onclick='setView(${arg(item.view)})' data-icon="arrow_forward">${item.view === "images" ? "画像へ" : "投稿文へ"}</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function taskBoardTone(status) {
+      return { "In Progress": "wait", Review: "wait", Todo: "none", Backlog: "missing" }[status] || "none";
+    }
+
+    function renderTaskBoard(board) {
+      const root = $("task-board-items");
+      const meta = $("task-board-meta");
+      if (!board.ok) {
+        meta.textContent = board.checked_at ? `取得失敗 / ${board.checked_at}` : "取得失敗";
+        root.innerHTML = `<div class="empty">${esc(board.error || "Task Board を取得できませんでした")}</div>`;
+        return;
+      }
+      const counts = board.counts || {};
+      const countText = ["In Progress", "Review", "Todo", "Backlog"].map((key) => counts[key] ? `${key} ${counts[key]}` : "").filter(Boolean).join(" / ");
+      meta.textContent = `${board.checked_at || "同期済み"}${countText ? " / " + countText : ""}`;
+      const items = board.items || [];
+      if (!items.length) {
+        root.innerHTML = `<div class="empty">未完了の改善予定はありません。</div>`;
+        return;
+      }
+      root.innerHTML = items.map((item) => `
+        <div class="task-board-item">
+          <div class="task-board-main">
+            <strong>${esc(item.title)}</strong>
+            <span>${item.number ? `#${esc(item.number)} / ` : ""}${esc(item.type || "未設定")}${item.area ? ` / ${esc(item.area)}` : ""}</span>
+          </div>
+          <div class="task-board-badges">
+            <span class="pill ${esc(taskBoardTone(item.status))}">${esc(item.status)}</span>
+            <span class="pill">${esc(item.priority || "未設定")}</span>
+            ${item.url ? `<button onclick='window.open(${arg(item.url)}, "_blank", "noopener,noreferrer")' data-icon="open_in_new">開く</button>` : ""}
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function renderDashboardJobs(jobs) {
+      const root = $("dashboard-jobs");
+      const latest = jobs.slice(0, 5);
+      if (!latest.length) {
+        root.innerHTML = `<div class="empty">実行ログはまだありません。</div>`;
+        return;
+      }
+      const tone = { running: "wait", done: "ok", failed: "fail" };
+      root.innerHTML = latest.map((job) => {
+        const label = commandLabels[job.command] || job.command;
+        const detail = [job.phase, job.finished_at || job.started_at, Number(job.progress || 0) ? `${Number(job.progress || 0)}%` : ""].filter(Boolean).join(" / ");
+        return `
+          <div class="dashboard-job-row">
+            <div class="dashboard-job-main">
+              <strong>${esc(label)}</strong>
+              <span>${esc(detail || "詳細なし")}</span>
+            </div>
+            <div class="dashboard-job-badges">
+              <span class="pill ${esc(tone[job.status] || "none")}">${esc(job.status || "unknown")}</span>
+              <button onclick='setView("logs")' data-icon="terminal">ログ</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function refreshTaskBoard(button = null) {
+      try {
+        if (button) {
+          button.disabled = true;
+          button.setAttribute("data-loading", "true");
+        }
+        const data = await api("/api/task-board/refresh", { method: "POST", body: JSON.stringify({}) });
+        if (state.data) {
+          state.data.task_board = data.task_board;
+          renderDashboard(state.data);
+        }
+        toast(data.task_board?.ok ? "Task Boardを同期しました" : "Task Boardを取得できませんでした", !data.task_board?.ok);
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+        }
+      }
+    }
+
+    function workerTotalCount(item) {
+      const targets = Array.isArray(item.targets) ? item.targets : [];
+      return Math.max(1, Number(item.total || targets.length || 1));
+    }
+
+    function workerDoneCount(item) {
+      const targets = Array.isArray(item.targets) ? item.targets : [];
+      if (targets.length) {
+        const doneFromTargets = targets.filter((target) => ["done", "failed", "skipped"].includes(String(target.status || ""))).length;
+        return Math.max(Number(item.done || 0), doneFromTargets);
+      }
+      if (item.status === "done") return workerTotalCount(item);
+      return Math.max(0, Number(item.done || 0));
+    }
+
+    function renderWorkerTargetList(item) {
+      const targets = Array.isArray(item.targets) ? item.targets : [];
+      if (!targets.length) return "";
+      return `
+        <div class="worker-target-list">
+          ${targets.map((target) => {
+            const label = target.label || target.kind || target.account_name || "対象";
+            return `<span class="worker-target-pill ${esc(target.status || "")}">${esc(label)}</span>`;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function renderWorkerLanes(job) {
+      const items = (job?.worker_items || []).filter(Boolean);
+      if (!items.length) return "";
+      const totalUnits = items.reduce((sum, item) => sum + workerTotalCount(item), 0);
+      const doneUnits = items.reduce((sum, item) => sum + workerDoneCount(item), 0);
+      const runningLanes = items.filter((item) => item.status === "running").length;
+      const failedLanes = items.filter((item) => item.status === "failed").length;
+      const counts = [
+        `処理 ${doneUnits}/${totalUnits}件`,
+        runningLanes ? `実行中 ${runningLanes}` : "",
+        failedLanes ? `失敗 ${failedLanes}` : "",
+      ].filter(Boolean).join(" / ");
+      const statusLabels = { queued: "待機", running: "実行中", done: "完了", failed: "失敗", skipped: "スキップ" };
+      return `
+        <div class="parallel-progress-board" aria-label="サブエージェント別進捗">
+          <div class="parallel-progress-head"><strong>サブエージェント別進捗</strong><span>${esc(counts)}</span></div>
+          <div class="worker-lanes">
+          ${items.map((item, index) => {
+            const total = workerTotalCount(item);
+            const done = workerDoneCount(item);
+            const progress = Math.max(0, Math.min(100, Number(item.progress || Math.round(done / total * 100))));
+            const detail = [
+              statusLabels[item.status] || item.status || "待機",
+              `担当 ${total}件`,
+              item.current ? `現在: ${item.current}` : "",
+            ].filter(Boolean).join(" / ");
+            const workerName = item.worker_label || `サブエージェント ${index + 1}`;
+            const subject = item.account_name && item.account_name !== workerName ? item.account_name : (item.label || item.kind || "");
+            return `
+              <div class="worker-lane ${esc(item.status || "")}">
+                <div class="worker-lane-head">
+                  <strong>${esc(workerName)}</strong>
+                  <span class="worker-lane-count">${done}/${total}</span>
+                </div>
+                ${subject ? `<span>${esc(subject)}</span>` : ""}
+                <div class="progress-track"><div class="progress-fill" style="--progress: ${progress}%"></div></div>
+                <span>${esc(detail)}</span>
+                <span>${esc(item.phase || "")}</span>
+                ${renderWorkerTargetList(item)}
+              </div>
+            `;
+          }).join("")}
+          </div>
+        </div>
+      `;
     }
 
     function renderWeeklyBulkStatus(data) {
       const root = $("weekly-bulk-status");
       if (!root) return;
-      const job = (data.jobs || []).find((item) => ["weekly-bulk", "weekly-bulk-resume"].includes(item.command) && item.status === "running")
-        || (data.jobs || []).find((item) => ["weekly-bulk", "weekly-bulk-resume"].includes(item.command));
+      const jobs = data.jobs || [];
+      const job = jobs.find((item) => isWeeklyJob(item) && item.status === "running")
+        || jobs.find((item) => isWeeklyJob(item));
+      const anyRunning = jobs.some((item) => item.status === "running");
+      const isPhaseJob = Boolean(job && String(job.command || "").startsWith("weekly-phase-"));
+      const activeStepKey = isPhaseJob ? (job.step_key || String(job.command || "").replace("weekly-phase-", "")) : "";
       const doneCount = Number(job?.validation_done || 0);
       const activeIndex = Math.min(weeklyBulkSteps.length - 1, Math.max(0, doneCount));
       const failed = job?.status === "failed";
@@ -8594,22 +10093,33 @@ INDEX_HTML = r"""<!doctype html>
       const progress = Math.max(0, Math.min(100, Number(job?.progress || 0)));
       root.innerHTML = `
         <div class="weekly-bulk-current">
+          <div class="progress-label-row"><strong>全体進捗</strong><span>${job ? `${progress}%` : "待機中"}</span></div>
           <strong>${esc(job ? (job.phase || commandLabels[job.command] || job.command) : "待機中")}</strong>
           <div class="progress-track"><div class="progress-fill" style="--progress: ${job ? progress : 0}%"></div></div>
           <span>${job ? `${esc(job.status)} / ${progress}%${job.finished_at ? " / " + esc(job.finished_at) : ""}` : "実行ログはログ画面にも残ります。"}</span>
         </div>
         <div class="weekly-bulk-steps">
           ${weeklyBulkSteps.map((step, index) => {
-            const status = complete || index < doneCount ? "done" : failed && index === activeIndex ? "fail" : job?.status === "running" && index === activeIndex ? "active" : "";
+            let status = "";
+            if (isPhaseJob) {
+              const matched = step.key === activeStepKey;
+              status = matched && complete ? "done" : matched && failed ? "fail" : matched && job?.status === "running" ? "active" : "";
+            } else {
+              status = complete || index < doneCount ? "done" : failed && index === activeIndex ? "fail" : job?.status === "running" && index === activeIndex ? "active" : "";
+            }
             const label = status === "done" ? "完了" : status === "fail" ? "停止" : status === "active" ? "実行中" : "待機";
+            const disabledAttr = anyRunning ? " disabled" : "";
+            const loadingAttr = status === "active" ? ' data-loading="true" aria-busy="true"' : ' aria-busy="false"';
             return `
               <div class="weekly-bulk-step ${status}">
                 <strong>${esc(step.label)}</strong>
-                <span>${esc(label)}</span>
+                <span class="weekly-step-status">${esc(label)}</span>
+                <button class="weekly-step-run" onclick='runWeeklyPhase(${arg(step.key)}, this)' data-icon="play_arrow"${disabledAttr}${loadingAttr}>実行</button>
               </div>
             `;
           }).join("")}
         </div>
+        ${renderWorkerLanes(job)}
       `;
     }
 
@@ -8736,10 +10246,24 @@ INDEX_HTML = r"""<!doctype html>
       });
       $("reload-sheet").disabled = running;
       $("reload-sheet").setAttribute("aria-busy", running ? "true" : "false");
-      const validationRunning = jobs.some((job) => ["image-validate", "image-validate-all"].includes(job.command) && job.status === "running");
-      $("validate-all-images").disabled = running || validationRunning;
-      $("validate-all-images").setAttribute("aria-busy", running || validationRunning ? "true" : "false");
-      $("validate-all-images").textContent = validationRunning ? "画像検証中" : "画像一括検証";
+      const sheetValidationRunning = jobs.some((job) => job.command === "validate-sheet-posts" && job.status === "running");
+      const imageValidationRunning = jobs.some((job) => ["image-validate", "image-validate-all"].includes(job.command) && job.status === "running");
+      const validationRunning = sheetValidationRunning || imageValidationRunning;
+      const validateAllChecksButton = $("validate-all-checks");
+      validateAllChecksButton.disabled = running || validationRunning;
+      validateAllChecksButton.setAttribute("aria-busy", running || validationRunning ? "true" : "false");
+      if (validationRunning) {
+        validateAllChecksButton.dataset.loading = "true";
+      } else {
+        validateAllChecksButton.removeAttribute("data-loading");
+      }
+      validateAllChecksButton.textContent = sheetValidationRunning && imageValidationRunning
+        ? "一括検証中"
+        : sheetValidationRunning
+          ? "投稿文検証中"
+          : imageValidationRunning
+            ? "画像検証中"
+            : "一括検証";
 
       const imageRunning = hasRunningGenerationJobs(jobs);
       const bulk = state.bulkImageQueue;
@@ -8774,6 +10298,26 @@ INDEX_HTML = r"""<!doctype html>
           ? `${postJob?.phase || "投稿文AI再作成中"}`
           : "投稿文一括AI再作成";
       }
+      const failedPostTargets = failedValidationPostTargets();
+      const failedPostJob = jobs.find((job) => job.command === "post-generate" && job.status === "running" && job.kind === "validation_failed");
+      ["generate-failed-validation-posts", "regenerate-failed-validation-posts"].forEach((buttonId) => {
+        const button = $(buttonId);
+        if (!button) return;
+        if (!button.dataset.defaultLabel) button.dataset.defaultLabel = button.textContent;
+        const baseLabel = button.dataset.defaultLabel || "検証NGだけAI再作成";
+        button.disabled = running || failedPostTargets.length === 0;
+        button.setAttribute("aria-busy", failedPostJob ? "true" : "false");
+        if (failedPostJob) {
+          button.dataset.loading = "true";
+        } else {
+          button.removeAttribute("data-loading");
+        }
+        button.textContent = failedPostJob
+          ? `${failedPostJob.phase || "検証NG投稿文AI再作成中"}`
+          : failedPostTargets.length
+          ? `${baseLabel} (${failedPostTargets.length})`
+          : baseLabel;
+      });
     }
 
     function renderPostRules(rules = {}) {
@@ -9623,7 +11167,6 @@ INDEX_HTML = r"""<!doctype html>
             <div class="inline-post-head-actions">
               ${syncBadge}
               <button class="ai-rewrite-button" onclick='openRewriteDialog(${rowNumber}, ${arg(field.key)})' data-icon="auto_fix_high" ${rewriteJob ? "disabled" : ""}>AIリライト</button>
-              <button class="sheet-open-button subtle" onclick='openSpreadsheet(${arg(cell || sheetRowRange(rowNumber))}, event)' data-icon="open_in_new">Sheets確認</button>
               <button onclick='syncPostToSheet(${arg(account.account_name || "")}, ${arg(postFieldKinds[field.key])}, this)' data-icon="cloud_upload" ${syncable ? "" : "disabled"}>スプレッドシートに反映</button>
               <span class="pill">${esc(region || "地域なし")}</span>
               <span class="cell-badge">${esc(cell || "-")}</span>
@@ -9729,6 +11272,21 @@ INDEX_HTML = r"""<!doctype html>
           </article>
         `;
       }).join("");
+      requestAnimationFrame(syncAccountSlotValidationHeights);
+    }
+
+    function syncAccountSlotValidationHeights() {
+      const shouldAlign = window.matchMedia("(min-width: 1121px)").matches;
+      document.querySelectorAll(".account-head").forEach((head) => {
+        head.style.removeProperty("--slot-validation-min-height");
+        if (!shouldAlign) return;
+        const visibleResults = Array.from(head.querySelectorAll(".validation-result:not(.is-empty)"));
+        if (!visibleResults.length) return;
+        const maxHeight = Math.max(...visibleResults.map((result) => Math.ceil(result.getBoundingClientRect().height)));
+        if (maxHeight > 0) {
+          head.style.setProperty("--slot-validation-min-height", `${maxHeight}px`);
+        }
+      });
     }
 
     function updateAccountFilterOptions(accounts) {
@@ -9795,12 +11353,14 @@ INDEX_HTML = r"""<!doctype html>
       const status = slotStatus(slot);
       const statusText = statusLabel(status);
       const job = activeImageJob(account.account_name, slot.kind);
-      const postJob = activePostGenerateJob(account.account_name, slot.kind);
+      const postJob = activePostGenerateJob(account.account_name, slot.kind, slot);
       const validationJob = activeValidationJob(account.account_name, slot.kind);
       const validationSuspect = validationIsSuspect(slot);
       const validationAccepted = validationIsAccepted(slot);
+      const validationResolvedText = validationResolvedLabel(slot);
+      const titleStatusClass = validationSuspect ? "suspect" : job ? "wait" : validationResolvedText ? "ok" : status;
+      const titleStatusText = validationSuspect ? "要確認" : job ? "生成中" : validationResolvedText || statusText;
       const syncable = canSyncPostSlot(slot);
-      const sheetRange = slotSheetRange(account, slot);
       const thumb = job
         ? renderGenerationThumb(job)
         : slot.image_url
@@ -9830,7 +11390,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="slot ${validationSuspect ? "validation-suspect" : job ? "generating" : status}">
           <div class="slot-title">
             <span>${esc(slot.label)}</span>
-            <span class="pill ${validationSuspect ? "suspect" : job ? "wait" : status}">${esc(validationSuspect ? "要確認" : job ? "生成中" : statusText)}</span>
+            <span class="pill ${titleStatusClass}">${esc(titleStatusText)}</span>
           </div>
           <div class="slot-meta">
             <span class="pill">${esc(slot.region || "地域なし")}</span>
@@ -9847,7 +11407,6 @@ INDEX_HTML = r"""<!doctype html>
           <div class="post-actions">
             <button onclick='prepareSlot(${arg(account.account_name)}, ${arg(slot.kind)}, this)' data-icon="edit_note" ${slot.empty || job || postJob ? "disabled" : ""}>${postJob ? "投稿文生成中" : "投稿文を再作成"}</button>
             <button onclick='openEditor(${arg(account.account_name)}, ${arg(slot.kind)}, "post")' data-icon="article" ${slot.empty ? "disabled" : ""}>投稿文編集</button>
-            <button class="sheet-open-button subtle" onclick='openSpreadsheet(${arg(sheetRange)}, event)' data-icon="open_in_new" ${sheetRange ? "" : "disabled"}>Sheets確認</button>
             <button onclick='syncPostToSheet(${arg(account.account_name)}, ${arg(slot.kind)}, this)' data-icon="cloud_upload" ${syncable ? "" : "disabled"}>スプレッドシートに反映</button>
             <button onclick='openEditor(${arg(account.account_name)}, ${arg(slot.kind)}, "prompt")' data-icon="description" ${slot.empty ? "disabled" : ""}>画像プロンプト編集</button>
           </div>
@@ -10041,11 +11600,12 @@ INDEX_HTML = r"""<!doctype html>
               ${hasOutput ? `<span class="job-expand-hint">${expanded ? "ログを隠す" : "ログを表示"}</span>` : ""}
             </div>
             ${job.account_name || job.template_name ? `<div class="meta">${job.account_name ? `${esc(job.account_name)} / ` : ""}${esc(job.label || job.kind || "")}${job.template_name ? " / " + esc(job.template_name) : ""}</div>` : ""}
-            ${job.validation_total ? `<div class="meta">${["weekly-bulk", "weekly-bulk-resume"].includes(job.command) ? "工程" : "検証"} ${Number(job.validation_done || 0)}/${Number(job.validation_total || 0)}${["weekly-bulk", "weekly-bulk-resume"].includes(job.command) ? "" : ` / 要確認 ${Number(job.suspect_count || 0)}`}</div>` : ""}
-            ${job.progress ? `<div class="progress-track"><div class="progress-fill" style="--progress: ${Math.max(0, Math.min(100, Number(job.progress || 0)))}%"></div></div><div class="meta">${esc(job.phase || "")} ${Number(job.progress || 0)}%</div>` : ""}
+            ${job.validation_total ? `<div class="meta">${isWeeklyJob(job) ? "工程" : "検証"} ${Number(job.validation_done || 0)}/${Number(job.validation_total || 0)}${isWeeklyJob(job) ? "" : ` / 要確認 ${Number(job.suspect_count || 0)}`}</div>` : ""}
+            ${job.progress ? `<div class="progress-label-row"><strong>全体進捗</strong><span>${Number(job.progress || 0)}%</span></div><div class="progress-track"><div class="progress-fill" style="--progress: ${Math.max(0, Math.min(100, Number(job.progress || 0)))}%"></div></div><div class="meta">${esc(job.phase || "")}</div>` : ""}
+            ${renderWorkerLanes(job)}
             <div class="meta">${esc(job.started_at)}${job.finished_at ? " -> " + esc(job.finished_at) : ""}</div>
             ${hasOutput ? `
-              <div class="job-output">
+              <div class="job-output" onclick="event.stopPropagation()">
                 <div class="code">${esc((job.stdout || "") + (job.stderr ? "\n" + job.stderr : ""))}</div>
               </div>
             ` : ""}
@@ -10269,6 +11829,15 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
+    async function runWeeklyPhase(key, button = null) {
+      const step = weeklyBulkSteps.find((item) => item.key === key);
+      if (!step) {
+        toast("未対応の工程です", true);
+        return;
+      }
+      await runCommand(step.command || weeklyPhaseCommand(key), button);
+    }
+
     async function reauthGws() {
       state.gwsAuthPopup = prepareGwsAuthPopup();
       try {
@@ -10333,6 +11902,41 @@ INDEX_HTML = r"""<!doctype html>
           body: JSON.stringify({ scope: "all" }),
         });
         toast("投稿文一括AI再作成を開始しました");
+        state.generationJobs[generationJobKey(data.job)] = { status: data.job.status, generated: data.job.generated };
+        startGenerationPolling();
+        setTimeout(() => refreshImageArea({ announce: false }).catch((err) => toast(err.message, true)), 500);
+      } catch (err) {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+        }
+        toast(err.message, true);
+      }
+    }
+
+    async function generateFailedValidationPosts(button = null) {
+      if (hasRunningGenerationJobs()) {
+        toast("生成処理中です。完了後に検証NG投稿文を再作成できます", true);
+        return;
+      }
+      const targets = failedValidationPostTargets();
+      if (!targets.length) {
+        toast("要確認または検証失敗の投稿文はありません。先に一括検証を実行してください", true);
+        return;
+      }
+      const preview = targets.slice(0, 8).map((target) => `- ${target.accountName} / ${target.label}`).join("\n");
+      const more = targets.length > 8 ? `\nほか ${targets.length - 8}件` : "";
+      if (!confirm(`検証NGの投稿文 ${targets.length}件だけをAIで再作成します。\n現在の投稿文ファイルは生成結果で上書きされます。\nスプレッドシート反映は別ボタンです。\n\n${preview}${more}\n\n続行しますか？`)) return;
+      try {
+        if (button) {
+          button.disabled = true;
+          button.dataset.loading = "true";
+        }
+        const data = await api("/api/post-generate", {
+          method: "POST",
+          body: JSON.stringify({ scope: "validation_failed" }),
+        });
+        toast("検証NG投稿文のAI再作成を開始しました");
         state.generationJobs[generationJobKey(data.job)] = { status: data.job.status, generated: data.job.generated };
         startGenerationPolling();
         setTimeout(() => refreshImageArea({ announce: false }).catch((err) => toast(err.message, true)), 500);
@@ -10506,17 +12110,22 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    async function validateAllImages(button) {
+    async function validateAllChecks(button) {
+      if (!confirm("投稿文整合性検証と画像一括検証をまとめて開始します。続行しますか？")) return;
       try {
         if (button) {
           button.disabled = true;
           button.dataset.loading = "true";
         }
-        const data = await api("/api/image-validate", {
+        const sheetData = await api("/api/job", {
+          method: "POST",
+          body: JSON.stringify({ command: "validate-sheet-posts" }),
+        });
+        const imageData = await api("/api/image-validate", {
           method: "POST",
           body: JSON.stringify({ all: true }),
         });
-        toast(`${data.job.validation_total || 0}件の画像検証を開始しました`);
+        toast(`${commandLabels[sheetData.job.command] || "投稿文検証"}と${imageData.job.validation_total || 0}件の画像検証を開始しました`);
         setTimeout(refresh, 500);
       } catch (err) {
         if (button) {
@@ -10566,6 +12175,38 @@ INDEX_HTML = r"""<!doctype html>
         }
         toast(err.message, true);
         return null;
+      }
+    }
+
+    async function generateAiTemplate(button = null) {
+      const instruction = $("ai-template-instruction").value.trim();
+      if (!instruction) {
+        toast("AIテンプレの指示を入力してください", true);
+        return;
+      }
+      try {
+        if (button) {
+          button.disabled = true;
+          button.dataset.loading = "true";
+        }
+        const data = await api("/api/template/ai-generate", {
+          method: "POST",
+          body: JSON.stringify({
+            kind: $("ai-template-kind").value || "common",
+            instruction,
+          }),
+        });
+        toast("AIテンプレ作成を開始しました");
+        state.generationJobs[generationJobKey(data.job)] = { status: data.job.status, generated: data.job.generated };
+        startGenerationPolling();
+        setTimeout(() => refreshImageArea({ announce: false }).catch((err) => toast(err.message, true)), 500);
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+        }
       }
     }
 
@@ -10657,7 +12298,7 @@ INDEX_HTML = r"""<!doctype html>
         slot.image_path || "",
         slot.approved_at ? `OK: ${slot.approved_at}` : "",
         slot.validation?.checked_at ? `画像検証: ${slot.validation.label || slot.validation.status} / ${slot.validation.checked_at}` : "",
-        slot.validation?.summary || "",
+        ["ok", "acknowledged"].includes(slot.validation?.status || "") ? "" : slot.validation?.summary || "",
       ].filter(Boolean).join("\n");
       $("image-preview").showModal();
     }
@@ -10806,7 +12447,7 @@ INDEX_HTML = r"""<!doctype html>
     function openTemplateEditor(mode = "new") {
       if (mode === "new") {
         $("template-editor-title").textContent = "新規テンプレ";
-        $("template-editor-subtitle").textContent = "参考画像や入力文から、画像生成に使う画風プロンプトを登録します。";
+        $("template-editor-subtitle").textContent = "見本画像や入力文から、画像生成に使う画風プロンプトを登録します。";
         $("template-name").value = "";
         $("template-kind").value = "common";
         $("template-text").value = "";
@@ -10867,7 +12508,12 @@ INDEX_HTML = r"""<!doctype html>
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => setView(button.dataset.view));
     });
-    $("mobile-view-select").addEventListener("change", (event) => setView(event.target.value));
+    $("nav-toggle").addEventListener("click", toggleDrawer);
+    $("drawer-scrim").addEventListener("click", () => setDrawerOpen(false));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.drawerOpen) setDrawerOpen(false);
+    });
+    $("mobile-view-select")?.addEventListener("change", (event) => setView(event.target.value));
     ["post-rules-disclosure", "image-rules-disclosure"].forEach((id) => {
       const el = $(id);
       if (!el) return;
@@ -10877,8 +12523,10 @@ INDEX_HTML = r"""<!doctype html>
       });
     });
     applyResponsiveDisclosureDefaults();
+    syncHeaderHeight();
     window.matchMedia("(max-width: 680px)").addEventListener("change", applyResponsiveDisclosureDefaults);
     $("refresh").addEventListener("click", refresh);
+    $("task-board-refresh").addEventListener("click", (event) => refreshTaskBoard(event.currentTarget));
     $("gws-auth-login").addEventListener("click", reauthGws);
     $("gws-auth-open").addEventListener("click", openLatestGwsAuthUrl);
     $("reload-sheet").addEventListener("click", reloadSheet);
@@ -10893,7 +12541,8 @@ INDEX_HTML = r"""<!doctype html>
     $("apply-region-board").addEventListener("click", applyRegionBoard);
     $("reset-region-board").addEventListener("click", resetRegionBoard);
     $("generate-all-images").addEventListener("click", (event) => generateAllImages(event.currentTarget));
-    $("validate-all-images").addEventListener("click", (event) => validateAllImages(event.currentTarget));
+    $("validate-all-checks").addEventListener("click", (event) => validateAllChecks(event.currentTarget));
+    $("regenerate-failed-validation-posts").addEventListener("click", (event) => generateFailedValidationPosts(event.currentTarget));
     $("new-template").addEventListener("click", () => openTemplateEditor("new"));
     $("new-template-main").addEventListener("click", () => openTemplateEditor("new"));
     $("close-template-editor").addEventListener("click", () => $("template-editor").close());
@@ -10922,6 +12571,7 @@ INDEX_HTML = r"""<!doctype html>
       if (!$("template-preview").files[0]) previewTemplateSelectedImage("template-reference", "見本画像");
     });
     $("template-preview").addEventListener("change", () => previewTemplateSelectedImage("template-preview", "サムネイル上書き"));
+    $("ai-template-generate").addEventListener("click", (event) => generateAiTemplate(event.currentTarget));
     $("prompt-template-search").addEventListener("input", (event) => {
       state.templateFilters.query = event.target.value;
       if (state.data) renderTemplateManagement(state.data.templates || []);
@@ -10966,13 +12616,18 @@ INDEX_HTML = r"""<!doctype html>
     $("image-picker").addEventListener("change", (event) => uploadPickedImage(event.target.files[0]));
     $("editor-text").addEventListener("input", resizePostEditor);
     window.addEventListener("resize", resizeOpenPostEditor);
+    window.addEventListener("resize", syncHeaderHeight);
+    window.addEventListener("resize", syncAccountSlotValidationHeights);
     window.visualViewport?.addEventListener("resize", resizeOpenPostEditor);
+    window.visualViewport?.addEventListener("resize", syncHeaderHeight);
+    window.visualViewport?.addEventListener("resize", syncAccountSlotValidationHeights);
     $("close-editor").addEventListener("click", () => $("editor").close());
     $("save-post").addEventListener("click", savePost);
     $("sync-post-sheet").addEventListener("click", (event) => syncOpenPostToSheet(event.currentTarget));
     $("copy-editor").addEventListener("click", () => copyText($("editor-text").value));
     $("sync-dirty-posts").addEventListener("click", (event) => syncDirtyPosts(event.currentTarget));
     $("generate-all-posts").addEventListener("click", (event) => generateAllPosts(event.currentTarget));
+    $("generate-failed-validation-posts").addEventListener("click", (event) => generateFailedValidationPosts(event.currentTarget));
     $("close-sheet-editor").addEventListener("click", () => $("sheet-editor").close());
     $("close-rewrite-dialog").addEventListener("click", () => $("rewrite-dialog").close());
     $("cancel-rewrite-dialog").addEventListener("click", () => $("rewrite-dialog").close());

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import mimetypes
 import os
@@ -250,7 +249,7 @@ def image_data_uri(path: Path | None) -> str:
 
 
 def approval_key(account_name: str, kind: str) -> str:
-    return hashlib.sha256(f"{account_name}:{kind}".encode("utf-8")).hexdigest()
+    return f"{account_name}::{kind}"
 
 
 def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, Any]:
@@ -449,6 +448,8 @@ def local_gui_path_for_job(job_type: str) -> tuple[str, dict[str, Any]]:
         return "/api/post-generate", {}
     if job_type == "rewrite_all_posts_with_style":
         return "/api/post-generate", {"scope": "all"}
+    if job_type == "rewrite_failed_validation_posts":
+        return "/api/post-generate", {"scope": "validation_failed"}
     if job_type == "save_image_prompt":
         return "/api/prompt", {}
     if job_type == "cancel_image":
@@ -548,7 +549,7 @@ def handle_local_gui_bridge_job(job: dict[str, Any]) -> tuple[dict[str, Any], li
     bridged_payload = {**defaults, **payload}
     response = request_local_gui(path, bridged_payload)
     wait_logs: list[str] = []
-    if path == "/api/job":
+    if isinstance(response.get("job"), dict):
         response, wait_logs = wait_for_local_gui_job(response)
     snapshot = build_jmty_snapshot()
     result = {
@@ -598,6 +599,7 @@ def process_job(config: WorkerConfig, job: dict[str, Any]) -> None:
             "sync_all_dirty_posts_to_sheet",
             "rewrite_post_with_style",
             "rewrite_all_posts_with_style",
+            "rewrite_failed_validation_posts",
             "save_image_prompt",
             "cancel_image",
             "approve_image",

@@ -53,6 +53,7 @@ const jobLabels: Partial<Record<JobType, string>> = {
   sync_all_dirty_posts_to_sheet: "未反映をスプレッドシートに反映",
   rewrite_post_with_style: "投稿文AI再作成",
   rewrite_all_posts_with_style: "投稿文一括AI再作成",
+  rewrite_failed_validation_posts: "検証NG投稿文AI再作成",
   save_image_prompt: "画像プロンプト保存",
   cancel_image: "画像登録取消",
   approve_image: "画像OK",
@@ -146,30 +147,53 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
   const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [pendingMessage, setPendingMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [activeJobType, setActiveJobType] = useState<JobType | null>(null);
   const accounts = snapshot?.accounts || [];
   const queuedCount = jobs.filter((job) => job.status === "queued").length;
   const runningCount = jobs.filter((job) => job.status === "running").length;
   const dirtyCount = snapshot?.syncSummary?.dirtyCount ?? snapshot?.syncSummary?.dirty_count ?? 0;
   const workerStatus = snapshot?.workerStatus?.status || (snapshot ? "同期済み" : "未同期");
-
+  const failedValidationCount = accounts.reduce(
+    (sum, account) => sum + account.slots.filter((slot) => ["suspect", "error"].includes(slot.validationStatus || "")).length,
+    0,
+  );
   const recentBySlot = useMemo(() => jobs.slice(0, 30), [jobs]);
+  const isQueueingJob = activeJobType !== null;
+  const failedValidationActionDisabled = isQueueingJob || failedValidationCount === 0;
+  const failedValidationActionTitle = failedValidationCount === 0 ? "要確認または検証失敗の投稿文がないため、再作成対象がありません" : undefined;
+
+  function queueLabel(type: JobType, label: string) {
+    return activeJobType === type ? "追加中..." : label;
+  }
+
+  function failedValidationLabel(label: string) {
+    return failedValidationCount ? `${label} (${failedValidationCount})` : `${label} (対象なし)`;
+  }
 
   async function queueJob(type: JobType, payload: Record<string, unknown> = {}) {
     setErrorMessage("");
     setPendingMessage(`${jobLabels[type] || type} をキューに追加しています...`);
-    const response = await fetch("/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, payload: { requestedFrom: "vercel_jmty_gui", ...payload } }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
+    setActiveJobType(type);
+    try {
+      const response = await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, payload: { requestedFrom: "vercel_jmty_gui", ...payload } }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setPendingMessage("");
+        setErrorMessage(String(data.error || "ジョブ作成に失敗しました"));
+        return;
+      }
+      setPendingMessage(`${jobLabels[type] || type} をキューに追加しました。Mac workerが処理します。`);
+      router.refresh();
+    } catch (error) {
       setPendingMessage("");
-      setErrorMessage(String(data.error || "ジョブ作成に失敗しました"));
-      return;
+      setErrorMessage(error instanceof Error ? error.message : "ジョブ作成に失敗しました");
+    } finally {
+      setActiveJobType(null);
     }
-    setPendingMessage(`${jobLabels[type] || type} をキューに追加しました。Mac workerが処理します。`);
-    router.refresh();
   }
 
   function queueForm(type: JobType, fixedPayload: Record<string, unknown> = {}) {
@@ -310,9 +334,12 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
           <div className="web-panel-headline">
             <h2>ダッシュボード</h2>
             <div className="web-action-row">
-              <button onClick={() => queueJob("prepare_posts")}>投稿文一括AI再作成</button>
-              <button onClick={() => queueJob("reload_sheet")}>シート読込</button>
-              <button onClick={() => queueJob("sync_all_dirty_posts_to_sheet")}>未反映をスプレッドシートに反映</button>
+              <button disabled={isQueueingJob} onClick={() => queueJob("prepare_posts")}>{queueLabel("prepare_posts", "投稿文一括AI再作成")}</button>
+              <button disabled={failedValidationActionDisabled} title={failedValidationActionTitle} onClick={() => queueJob("rewrite_failed_validation_posts")}>
+                {queueLabel("rewrite_failed_validation_posts", failedValidationLabel("検証NG投稿文AI再作成"))}
+              </button>
+              <button disabled={isQueueingJob} onClick={() => queueJob("reload_sheet")}>{queueLabel("reload_sheet", "シート読込")}</button>
+              <button disabled={isQueueingJob} onClick={() => queueJob("sync_all_dirty_posts_to_sheet")}>{queueLabel("sync_all_dirty_posts_to_sheet", "未反映をスプレッドシートに反映")}</button>
             </div>
           </div>
           {accounts.length ? accounts.map((account) => (
@@ -327,7 +354,15 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
       {activeTab === "posts" ? (
         <section className="web-view">
           {renderRulesForm("save_post_rules", "投稿文作成ルール", snapshot?.postRules)}
-          <div className="web-panel-headline"><h2>投稿文管理</h2><button onClick={() => queueJob("rewrite_all_posts_with_style")}>投稿文一括AI再作成</button></div>
+          <div className="web-panel-headline">
+            <h2>投稿文管理</h2>
+            <div className="web-action-row">
+              <button disabled={failedValidationActionDisabled} title={failedValidationActionTitle} onClick={() => queueJob("rewrite_failed_validation_posts")}>
+                {queueLabel("rewrite_failed_validation_posts", failedValidationLabel("検証NGだけAI再作成"))}
+              </button>
+              <button disabled={isQueueingJob} onClick={() => queueJob("rewrite_all_posts_with_style")}>{queueLabel("rewrite_all_posts_with_style", "投稿文一括AI再作成")}</button>
+            </div>
+          </div>
           {accounts.map((account) => (
             <section className="web-account" key={`posts-${account.accountName}`}>
               <div className="web-account-head"><h2>{account.accountName}</h2></div>
@@ -341,8 +376,8 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
                       <textarea name="text" defaultValue={slot.postText || ""} />
                       <div className="web-action-row">
                         <button className="web-primary">アプリに保存</button>
-                        <button type="button" onClick={() => queueJob("sync_post_to_sheet", slotPayload(account, slot))}>スプレッドシートに反映</button>
-                        <button type="button" onClick={() => queueJob("rewrite_post_with_style", slotPayload(account, slot))}>AI再作成</button>
+                        <button type="button" disabled={isQueueingJob} onClick={() => queueJob("sync_post_to_sheet", slotPayload(account, slot))}>スプレッドシートに反映</button>
+                        <button type="button" disabled={isQueueingJob} onClick={() => queueJob("rewrite_post_with_style", slotPayload(account, slot))}>{queueLabel("rewrite_post_with_style", "AI再作成")}</button>
                       </div>
                     </div>
                   </FieldPayloadForm>
@@ -370,8 +405,11 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
           <div className="web-panel-headline">
             <h2>画像生成</h2>
             <div className="web-action-row">
-              <button onClick={() => queueJob("sync_drive")}>Driveへ反映</button>
-              <button onClick={() => queueJob("sync_sheet")}>スプレッドシートに反映</button>
+              <button disabled={failedValidationActionDisabled} title={failedValidationActionTitle} onClick={() => queueJob("rewrite_failed_validation_posts")}>
+                {queueLabel("rewrite_failed_validation_posts", failedValidationLabel("NG投稿文再作成"))}
+              </button>
+              <button disabled={isQueueingJob} onClick={() => queueJob("sync_drive")}>{queueLabel("sync_drive", "Driveへ反映")}</button>
+              <button disabled={isQueueingJob} onClick={() => queueJob("sync_sheet")}>{queueLabel("sync_sheet", "スプレッドシートに反映")}</button>
             </div>
           </div>
           {accounts.map((account) => <section className="web-account" key={`images-${account.accountName}`}><div className="web-account-head"><h2>{account.accountName}</h2></div><div className="web-slot-grid">{account.slots.map((slot) => renderSlotCard(account, slot, "image"))}</div></section>)}
