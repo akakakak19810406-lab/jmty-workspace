@@ -27,6 +27,18 @@ export type JmtyRules = {
   [key: string]: unknown;
 };
 
+export type JmtyHistoryEntry = {
+  type: "post" | "image";
+  branch: string;
+  commit: string;
+  shortCommit?: string;
+  committedAt?: string;
+  subject?: string;
+  path?: string;
+  title?: string;
+  preview?: string;
+};
+
 export type JmtySlotState = {
   kind: JmtySlotKind;
   label: string;
@@ -49,6 +61,10 @@ export type JmtySlotState = {
   approved?: boolean;
   validationStatus?: string;
   validationMessage?: string;
+  postHistory?: JmtyHistoryEntry[];
+  post_history?: JmtyHistoryEntry[];
+  imageHistory?: JmtyHistoryEntry[];
+  image_history?: JmtyHistoryEntry[];
   updatedAt?: string;
 };
 

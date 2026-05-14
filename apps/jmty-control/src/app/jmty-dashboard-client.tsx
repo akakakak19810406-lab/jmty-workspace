@@ -6,7 +6,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { Job, JobType } from "@/lib/jobs";
-import type { JmtyAccountState, JmtySampleGroup, JmtySlotState, JmtySnapshot } from "@/lib/jmty-state";
+import type { JmtyAccountState, JmtyHistoryEntry, JmtySampleGroup, JmtySlotState, JmtySnapshot } from "@/lib/jmty-state";
 
 type Props = {
   snapshot: JmtySnapshot | null;
@@ -51,6 +51,8 @@ const jobLabels: Partial<Record<JobType, string>> = {
   save_post: "投稿文をアプリに保存",
   sync_post_to_sheet: "投稿文をスプレッドシートに反映",
   sync_all_dirty_posts_to_sheet: "未反映をスプレッドシートに反映",
+  restore_post_history: "投稿文履歴から復元",
+  restore_image_history: "画像履歴から復元",
   rewrite_post_with_style: "投稿文AI再作成",
   rewrite_all_posts_with_style: "投稿文一括AI再作成",
   rewrite_failed_validation_posts: "検証NG投稿文AI再作成",
@@ -120,6 +122,16 @@ function latestSlotJob(jobs: Job[], accountName: string, kind: string) {
   });
 }
 
+function slotHistories(slot: JmtySlotState, type: "post" | "image") {
+  const camel = type === "post" ? slot.postHistory : slot.imageHistory;
+  const snake = type === "post" ? slot.post_history : slot.image_history;
+  return camel || snake || [];
+}
+
+function historyKey(account: JmtyAccountState, slot: JmtySlotState, type: "post" | "image") {
+  return `${account.accountName}::${slot.kind}::${type}`;
+}
+
 function FieldPayloadForm({
   children,
   onSubmit,
@@ -148,6 +160,7 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
   const [pendingMessage, setPendingMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [activeJobType, setActiveJobType] = useState<JobType | null>(null);
+  const [expandedHistoryKey, setExpandedHistoryKey] = useState("");
   const accounts = snapshot?.accounts || [];
   const queuedCount = jobs.filter((job) => job.status === "queued").length;
   const runningCount = jobs.filter((job) => job.status === "running").length;
@@ -207,8 +220,38 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
     };
   }
 
+  function renderHistoryList(account: JmtyAccountState, slot: JmtySlotState, type: "post" | "image") {
+    const key = historyKey(account, slot, type);
+    if (expandedHistoryKey !== key) {
+      return null;
+    }
+    const histories = slotHistories(slot, type);
+    const restoreType: JobType = type === "post" ? "restore_post_history" : "restore_image_history";
+    return (
+      <div className="web-history-list">
+        {histories.length ? histories.map((entry: JmtyHistoryEntry) => (
+          <article className="web-history-item" key={`${key}-${entry.commit}`}>
+            <div>
+              <strong>{entry.title || entry.subject || (type === "post" ? "投稿文履歴" : "画像履歴")}</strong>
+              <p>{formatDate(entry.committedAt)} / {entry.branch} / {entry.shortCommit || entry.commit.slice(0, 12)}</p>
+              {entry.preview ? <span>{preview(entry.preview, 120)}</span> : null}
+            </div>
+            <button
+              type="button"
+              disabled={isQueueingJob}
+              onClick={() => queueJob(restoreType, slotPayload(account, slot, { commit: entry.commit }))}
+            >
+              復元
+            </button>
+          </article>
+        )) : <div className="web-empty compact">まだ履歴がありません</div>}
+      </div>
+    );
+  }
+
   function renderSlotCard(account: JmtyAccountState, slot: JmtySlotState, mode: "dashboard" | "image" = "dashboard") {
     const recent = latestSlotJob(recentBySlot, account.accountName, slot.kind);
+    const imageHistoryKey = historyKey(account, slot, "image");
     return (
       <article className="web-slot-card" key={`${account.accountName}-${slot.kind}`}>
         <div className="web-slot-head">
@@ -234,10 +277,12 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
         {recent ? <p className="web-job-hint">最新ジョブ: {jobLabels[recent.type] || recent.type} / {statusLabels[recent.status]}</p> : null}
         <div className="web-action-grid">
           <button onClick={() => queueJob("generate_image", slotPayload(account, slot))}>画像生成</button>
+          <button type="button" onClick={() => setExpandedHistoryKey(expandedHistoryKey === imageHistoryKey ? "" : imageHistoryKey)}>画像履歴</button>
           <button onClick={() => queueJob("validate_image", slotPayload(account, slot))}>{slot.validationStatus ? "再検証" : "画像検証"}</button>
           {mode === "image" && slot.hasImage ? <button onClick={() => queueJob("cancel_image", slotPayload(account, slot))}>画像登録取消</button> : null}
           {mode === "image" && !slot.approved && slot.hasImage ? <button onClick={() => queueJob("approve_image", slotPayload(account, slot))}>OK</button> : null}
         </div>
+        {renderHistoryList(account, slot, "image")}
       </article>
     );
   }
@@ -378,7 +423,17 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
                         <button className="web-primary">アプリに保存</button>
                         <button type="button" disabled={isQueueingJob} onClick={() => queueJob("sync_post_to_sheet", slotPayload(account, slot))}>スプレッドシートに反映</button>
                         <button type="button" disabled={isQueueingJob} onClick={() => queueJob("rewrite_post_with_style", slotPayload(account, slot))}>{queueLabel("rewrite_post_with_style", "AI再作成")}</button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const key = historyKey(account, slot, "post");
+                            setExpandedHistoryKey(expandedHistoryKey === key ? "" : key);
+                          }}
+                        >
+                          投稿文履歴
+                        </button>
                       </div>
+                      {renderHistoryList(account, slot, "post")}
                     </div>
                   </FieldPayloadForm>
                 ))}

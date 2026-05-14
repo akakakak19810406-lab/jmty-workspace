@@ -543,6 +543,40 @@ pre {
 .web-badge.failed { background: #fef3f2; border-color: #fecdca; color: #b42318; }
 .web-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .web-job-hint { color: var(--muted); font-size: 12px; }
+.web-history-list {
+  display: grid;
+  gap: 8px;
+}
+.web-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #ffffff;
+}
+.web-history-item strong,
+.web-history-item p,
+.web-history-item span {
+  overflow-wrap: anywhere;
+}
+.web-history-item strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.web-history-item p {
+  margin: 3px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.web-history-item span {
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .web-form,
 .web-edit-card,
 .web-sample-card { min-width: 0; }
@@ -568,6 +602,7 @@ pre {
 .web-two-col label { display: grid; gap: 6px; color: #344054; font-size: 13px; font-weight: 700; }
 .web-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
 .web-empty { border: 1px dashed var(--line); border-radius: 14px; padding: 24px; text-align: center; color: var(--muted); background: #fff; }
+.web-empty.compact { padding: 12px; font-size: 13px; }
 .web-job-list { display: grid; gap: 10px; }
 .web-job-card { padding: 12px; display: grid; gap: 8px; }
 .web-job-card pre { max-height: 260px; overflow: auto; background: #101828; color: #f2f4f7; border-radius: 10px; padding: 10px; }
@@ -606,4 +641,5 @@ pre {
   .web-header-actions,
   .web-action-row,
   .web-action-grid { grid-template-columns: 1fr; }
+  .web-history-item { grid-template-columns: 1fr; }
 }

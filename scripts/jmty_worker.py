@@ -36,6 +36,11 @@ IMAGE_PROMPT_TEMPLATES_DIR = ROOT / "inputs/jmty_image_prompt_templates"
 LOCAL_GUI_BASE_URL = os.environ.get("JMTY_LOCAL_GUI_BASE_URL", "http://127.0.0.1:8787")
 LOCAL_GUI_JOB_TIMEOUT_SECONDS = int(os.environ.get("JMTY_LOCAL_GUI_JOB_TIMEOUT_SECONDS", "1800"))
 LOCAL_GUI_JOB_POLL_SECONDS = int(os.environ.get("JMTY_LOCAL_GUI_JOB_POLL_SECONDS", "5"))
+GIT_HISTORY_LIMIT = max(1, int(os.environ.get("JMTY_GIT_HISTORY_LIMIT", "12")))
+GIT_SAVE_BRANCHES = {
+    "post": "script-save",
+    "image": "image-save",
+}
 SLOT_DEFS = [
     ("factory", "工場", "工場の投稿文章.md", "工場_画像プロンプト.md", ["工場.jpg", "工場.png", "工場.jpeg"]),
     ("remote1", "在宅1", "在宅1の投稿文章.md", "在宅1_画像プロンプト.md", ["在宅1.jpg", "在宅1.png", "在宅1.jpeg"]),
@@ -109,6 +114,63 @@ def rel_to_root(path: Path) -> str:
         return str(path.resolve().relative_to(ROOT))
     except ValueError:
         return str(path)
+
+
+def git_run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, encoding="utf-8")
+    if check and result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or f"git exited with {result.returncode}").strip())
+    return result
+
+
+def git_ref_exists(ref: str) -> bool:
+    return git_run(["rev-parse", "--verify", ref], check=False).returncode == 0
+
+
+def git_blob_text(commit: str, rel_path: str) -> str:
+    if not rel_path:
+        return ""
+    result = git_run(["show", f"{commit}:{rel_path}"], check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def list_git_history(history_type: str, path: Path | None, limit: int = GIT_HISTORY_LIMIT) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    branch = GIT_SAVE_BRANCHES.get(history_type)
+    if not branch:
+        return []
+    try:
+        rel_path = rel_to_root(path)
+    except Exception:
+        return []
+    branch_ref = f"refs/heads/{branch}"
+    if not git_ref_exists(branch_ref):
+        return []
+    result = git_run(["log", f"--max-count={limit}", "--format=%H%x00%cI%x00%s", branch_ref, "--", rel_path], check=False)
+    if result.returncode != 0:
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\x00", 2)
+        if len(parts) != 3:
+            continue
+        commit, committed_at, subject = parts
+        entry = {
+            "type": history_type,
+            "branch": branch,
+            "commit": commit,
+            "shortCommit": commit[:12],
+            "committedAt": committed_at,
+            "subject": subject,
+            "path": rel_path,
+        }
+        if history_type == "post":
+            text = git_blob_text(commit, rel_path)
+            entry["title"] = next((item.strip() for item in text.splitlines() if item.strip()), "")
+            entry["preview"] = preview_text(text, 140)
+        entries.append(entry)
+    return entries
 
 
 def split_remote_regions(value: Any) -> tuple[str, str]:
@@ -299,6 +361,7 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
             post_text = read_text(account_dir / post_name)
             prompt_text = read_text(account_dir / prompt_name)
             image_path = next((account_dir / name for name in image_names if (account_dir / name).exists()), None)
+            history_image_path = image_path or account_dir / (image_names[1] if len(image_names) > 1 else image_names[0])
             normalized_account_name = normalize_account_name(account_dir.name)
             task = task_index.get((normalized_account_name, kind), {})
             task_region = region_for_slot(kind, task.get("region", "") if isinstance(task, dict) else "")
@@ -330,6 +393,8 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
                     "approved": bool(approvals.get(key, {}).get("approved")) if isinstance(approvals, dict) else False,
                     "validationStatus": validation_status,
                     "validationMessage": validation_message,
+                    "postHistory": list_git_history("post", account_dir / post_name),
+                    "imageHistory": list_git_history("image", history_image_path),
                     "updatedAt": file_updated_at(account_dir / post_name) if post_text else "",
                 }
             )
@@ -444,6 +509,10 @@ def local_gui_path_for_job(job_type: str) -> tuple[str, dict[str, Any]]:
         return "/api/post/sheet-sync", {}
     if job_type == "sync_all_dirty_posts_to_sheet":
         return "/api/post/sheet-sync-all", {}
+    if job_type == "restore_post_history":
+        return "/api/history/restore", {"history_type": "post"}
+    if job_type == "restore_image_history":
+        return "/api/history/restore", {"history_type": "image"}
     if job_type == "rewrite_post_with_style":
         return "/api/post-generate", {}
     if job_type == "rewrite_all_posts_with_style":
@@ -597,6 +666,8 @@ def process_job(config: WorkerConfig, job: dict[str, Any]) -> None:
             "save_post",
             "sync_post_to_sheet",
             "sync_all_dirty_posts_to_sheet",
+            "restore_post_history",
+            "restore_image_history",
             "rewrite_post_with_style",
             "rewrite_all_posts_with_style",
             "rewrite_failed_validation_posts",

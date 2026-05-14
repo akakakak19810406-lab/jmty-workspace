@@ -16,6 +16,8 @@ export const JOB_TYPES = [
   "save_post",
   "sync_post_to_sheet",
   "sync_all_dirty_posts_to_sheet",
+  "restore_post_history",
+  "restore_image_history",
   "rewrite_post_with_style",
   "rewrite_all_posts_with_style",
   "rewrite_failed_validation_posts",

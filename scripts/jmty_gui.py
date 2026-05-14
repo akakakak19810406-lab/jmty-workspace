@@ -48,10 +48,16 @@ CODEX_VALIDATION_TIMEOUT_SECONDS = int(os.environ.get("JMTY_CODEX_VALIDATION_TIM
 CODEX_REWRITE_TIMEOUT_SECONDS = int(os.environ.get("JMTY_CODEX_REWRITE_TIMEOUT_SECONDS", "420"))
 CODEX_POST_GENERATION_TIMEOUT_SECONDS = int(os.environ.get("JMTY_CODEX_POST_GENERATION_TIMEOUT_SECONDS", "900"))
 POST_GENERATION_BATCH_SIZE = int(os.environ.get("JMTY_POST_GENERATION_BATCH_SIZE", "5"))
+POST_VALIDATION_MAX_ATTEMPTS = max(1, int(os.environ.get("JMTY_POST_VALIDATION_MAX_ATTEMPTS", "2")))
+GIT_HISTORY_LIMIT = max(1, int(os.environ.get("JMTY_GIT_HISTORY_LIMIT", "12")))
 IMAGE_VALIDATION_CONCURRENCY = max(1, int(os.environ.get("JMTY_IMAGE_VALIDATION_CONCURRENCY", "4")))
 WEEKLY_ACCOUNT_PARALLELISM = max(1, int(os.environ.get("JMTY_WEEKLY_ACCOUNT_PARALLELISM", "2")))
 VALIDATION_FAILED_POST_SCOPE = "validation_failed"
 VALIDATION_FAILED_STATUSES = {"suspect", "error"}
+GIT_SAVE_BRANCHES = {
+    "post": "script-save",
+    "image": "image-save",
+}
 GITHUB_PROJECT_OWNER = os.environ.get("JMTY_GITHUB_PROJECT_OWNER", "akakakak19810406-lab")
 GITHUB_PROJECT_NUMBER = os.environ.get("JMTY_GITHUB_PROJECT_NUMBER", "1")
 GITHUB_PROJECT_ITEM_LIMIT = max(1, int(os.environ.get("JMTY_GITHUB_PROJECT_ITEM_LIMIT", "30")))
@@ -626,6 +632,171 @@ def file_url(path: Path | None) -> str | None:
     return "/api/file?" + urllib.parse.urlencode({"path": rel_to_root(path), "v": version})
 
 
+def preview_history_text(text: str, limit: int = 140) -> str:
+    collapsed = " ".join(str(text or "").split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit].rstrip() + "..."
+
+
+def git_run(
+    args: list[str],
+    *,
+    input_text: str | None = None,
+    input_bytes: bytes | None = None,
+    check: bool = True,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[Any]:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    command = ["git", "-C", str(ROOT), *args]
+    if input_bytes is not None:
+        result = subprocess.run(command, input=input_bytes, capture_output=True, env=env)
+    else:
+        result = subprocess.run(command, input=input_text, capture_output=True, env=env, text=True, encoding="utf-8")
+    if check and result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace") if isinstance(result.stderr, bytes) else result.stderr
+        stdout = result.stdout.decode("utf-8", errors="replace") if isinstance(result.stdout, bytes) else result.stdout
+        raise RuntimeError((stderr or stdout or f"git exited with {result.returncode}").strip())
+    return result
+
+
+def git_ref_exists(ref: str) -> bool:
+    return git_run(["rev-parse", "--verify", ref], check=False).returncode == 0
+
+
+def git_current_branch() -> str:
+    result = git_run(["branch", "--show-current"], check=False)
+    return str(result.stdout or "").strip() or "HEAD"
+
+
+def git_rel_path(path: Path) -> str:
+    resolved = path.resolve()
+    if not path_in_root(resolved):
+        raise ValueError(f"Git保存できないパスです: {path}")
+    return rel_to_root(resolved)
+
+
+def git_history_branch(history_type: str) -> str:
+    branch = GIT_SAVE_BRANCHES.get(history_type)
+    if not branch:
+        raise ValueError(f"未対応の履歴種別です: {history_type}")
+    return branch
+
+
+def git_author_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = {
+        "GIT_AUTHOR_NAME": os.environ.get("GIT_AUTHOR_NAME", "JMTY GUI"),
+        "GIT_AUTHOR_EMAIL": os.environ.get("GIT_AUTHOR_EMAIL", "jmty-gui@local"),
+        "GIT_COMMITTER_NAME": os.environ.get("GIT_COMMITTER_NAME", "JMTY GUI"),
+        "GIT_COMMITTER_EMAIL": os.environ.get("GIT_COMMITTER_EMAIL", "jmty-gui@local"),
+    }
+    if extra:
+        env.update(extra)
+    return env
+
+
+def commit_history_paths(history_type: str, paths: list[Path], subject: str, detail_lines: list[str]) -> dict[str, Any]:
+    rel_paths = []
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            rel_path = git_rel_path(path)
+        except ValueError:
+            continue
+        if rel_path not in seen:
+            seen.add(rel_path)
+            rel_paths.append(rel_path)
+    if not rel_paths:
+        return {"committed": False, "reason": "保存対象ファイルがありません"}
+
+    branch = git_history_branch(history_type)
+    current_branch = git_current_branch()
+    branch_ref = f"refs/heads/{branch}"
+    base_result = git_run(["rev-parse", "--verify", branch_ref], check=False)
+    if base_result.returncode == 0:
+        base_commit = str(base_result.stdout).strip()
+        created_branch = False
+    else:
+        base_commit = str(git_run(["rev-parse", "HEAD"]).stdout).strip()
+        created_branch = True
+
+    with tempfile.TemporaryDirectory(prefix="jmty-git-index-") as temp_dir:
+        temp_index = str(Path(temp_dir) / "index")
+        env = git_author_env({"GIT_INDEX_FILE": temp_index})
+        git_run(["read-tree", base_commit], extra_env=env)
+        git_run(["add", "-A", "--", *rel_paths], extra_env=env)
+        diff = git_run(["diff-index", "--cached", "--quiet", base_commit, "--"], check=False, extra_env=env)
+        if diff.returncode == 0:
+            return {
+                "committed": False,
+                "reason": "前回履歴から変更がありません",
+                "branch": branch,
+                "currentBranch": current_branch,
+            }
+        tree = str(git_run(["write-tree"], extra_env=env).stdout).strip()
+        message = "\n".join([subject, "", *detail_lines]).strip() + "\n"
+        commit = str(git_run(["commit-tree", tree, "-p", base_commit], input_text=message, extra_env=env).stdout).strip()
+        git_run(["update-ref", branch_ref, commit])
+
+    return {
+        "committed": True,
+        "branch": branch,
+        "commit": commit,
+        "shortCommit": commit[:12],
+        "createdBranch": created_branch,
+        "currentBranch": current_branch,
+        "restoredBranch": git_current_branch(),
+        "paths": rel_paths,
+    }
+
+
+def git_blob_bytes(commit: str, path: Path) -> bytes:
+    rel_path = git_rel_path(path)
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", str(commit or "").strip()):
+        raise ValueError("復元するコミットが不正です")
+    result = git_run(["show", f"{commit}:{rel_path}"], check=True, input_bytes=b"")
+    return result.stdout if isinstance(result.stdout, bytes) else str(result.stdout).encode("utf-8")
+
+
+def list_git_history(history_type: str, path: Path, limit: int = GIT_HISTORY_LIMIT) -> list[dict[str, Any]]:
+    try:
+        rel_path = git_rel_path(path)
+    except ValueError:
+        return []
+    branch = git_history_branch(history_type)
+    branch_ref = f"refs/heads/{branch}"
+    if not git_ref_exists(branch_ref):
+        return []
+    result = git_run(["log", f"--max-count={limit}", "--format=%H%x00%cI%x00%s", branch_ref, "--", rel_path], check=False)
+    if result.returncode != 0:
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in str(result.stdout or "").splitlines():
+        parts = line.split("\x00", 2)
+        if len(parts) != 3:
+            continue
+        commit, committed_at, subject = parts
+        entry = {
+            "type": history_type,
+            "branch": branch,
+            "commit": commit,
+            "shortCommit": commit[:12],
+            "committedAt": committed_at,
+            "subject": subject,
+            "path": rel_path,
+        }
+        if history_type == "post":
+            try:
+                text = git_blob_bytes(commit, path).decode("utf-8", errors="replace")
+                entry["title"] = first_post_title(text)
+                entry["preview"] = preview_history_text(text, 140)
+            except Exception:
+                entry["title"] = ""
+                entry["preview"] = ""
+        entries.append(entry)
+    return entries
+
+
 def unique_path(path: Path) -> Path:
     if not path.exists():
         return path
@@ -722,6 +893,13 @@ def load_post_rules() -> dict[str, str]:
 
 def post_kind_for_field(field_key: str) -> str:
     return "factory" if field_key == "factory_post" else "remote"
+
+
+def slot_kind_for_post_field(field_key: str) -> str:
+    for kind, key in POST_FIELD_KEYS.items():
+        if key == field_key:
+            return kind
+    return "remote1"
 
 
 def post_rules_prompt(kind: str) -> str:
@@ -1061,6 +1239,8 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
             "image_url": file_url(image_path),
             "post_path": rel_to_root(paths["post"]) if path_in_root(paths["post"]) else "",
             "prompt_path": rel_to_root(paths["prompt"]) if path_in_root(paths["prompt"]) else "",
+            "post_history": list_git_history("post", paths["post"]),
+            "image_history": list_git_history("image", image_path),
             "approved": bool(approvals.get(key, {}).get("approved")),
             "approved_at": approvals.get(key, {}).get("approved_at"),
             "validation": validation_for_slot(validations, account_name, kind, image_path, post_text),
@@ -1144,6 +1324,8 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     "image_url": file_url(image_path),
                     "post_path": rel_to_root(post_path) if path_in_root(post_path) else "",
                     "prompt_path": rel_to_root(prompt_path) if path_in_root(prompt_path) else "",
+                    "post_history": list_git_history("post", post_path),
+                    "image_history": list_git_history("image", image_path),
                     "approved": bool(approvals.get(key, {}).get("approved")),
                     "approved_at": approvals.get(key, {}).get("approved_at"),
                     "validation": validation_for_slot(validations, account_name, kind, image_path, display_post),
@@ -1999,6 +2181,7 @@ def save_post(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     text = strip_markdown_markers(str(payload.get("text") or ""))
     if not account_name or kind not in EXPECTED_IMAGE_FILENAMES:
         raise ValueError("アカウント名または種別が不正です")
+    text = validate_post_text_or_raise({"account_name": account_name, "kind": kind, "label": LABELS[kind]}, text)
 
     matching_task = None
     tasks = load_tasks(output_root)
@@ -2016,7 +2199,17 @@ def save_post(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
     paths["post"].parent.mkdir(parents=True, exist_ok=True)
     paths["post"].write_text(text, encoding="utf-8")
-    return {"path": rel_to_root(paths["post"]), "saved": True}
+    history = commit_history_paths(
+        "post",
+        [paths["post"], output_root / "tasks.json"],
+        f"{account_name} {LABELS[kind]}の投稿文を保存",
+        [
+            f"{rel_to_root(paths['post'])} を保存しました。",
+            "CTAと途中切れを確認してから保存しました。",
+            "作業ブランチは切り替えず、script-save に履歴を残しました。",
+        ],
+    )
+    return {"path": rel_to_root(paths["post"]), "saved": True, "history": history}
 
 
 def extract_post_salary_text(text: str, kind: str) -> str:
@@ -2270,6 +2463,7 @@ def build_post_generation_prompt(
     batch_index: int,
     batch_total: int,
     previous_hooks: list[str],
+    validation_feedback: str = "",
 ) -> str:
     has_factory = any(target["kind"] == "factory" for target in targets)
     has_remote = any(target["kind"] != "factory" for target in targets)
@@ -2308,6 +2502,11 @@ def build_post_generation_prompt(
         "- 画像側で読めた給与、職種、勤務種別が対象のkindや地域と矛盾しない場合は、投稿文側をその条件へ寄せてください。",
         "- 画像が明らかに別枠・別種別に見える場合でも、投稿文では対象kindと現在の地域を守り、実在しない条件を追加しないでください。",
     ] if has_validation_failed_targets else []
+    retry_notes = [
+        "前回出力の検証NG:",
+        validation_feedback,
+        "- 上の問題をすべて直し、CTAと文末まで完成した投稿文だけを返してください。",
+    ] if validation_feedback else []
     return "\n".join(
         [
             "あなたはジモティ求人投稿文の制作担当です。",
@@ -2322,6 +2521,8 @@ def build_post_generation_prompt(
             "- 1行目タイトルは variation_profile の title_style / appeal_axis / audience / emoji_instruction に合わせ、その都度違う切り口で新しく書く。",
             "- 投稿文本文にはシャープ記号やアスタリスク装飾を使わない。箇条書きの行頭ハイフンだけ使用可。",
             "- 【公式LINEURL】を必ず含める。実URL、電話番号、実在企業名、公式認定のような表現は追加しない。",
+            "- CTAとして【公式LINEURL】を本文の応募導線に自然に入れ、投稿文を途中で切らず最後の行まで完結させる。",
+            "- 最後の行を読点、コロン、開き括弧、短すぎる断片で終わらせない。",
             "- 地域、給与、勤務条件、工場/在宅の種別は、validation 指摘の矛盾解消に必要な場合を除き、現在の投稿文・シート情報・案件素材から勝手に変えない。",
             "- 工場投稿は工場求人として書き、完全在宅や出勤不要など在宅求人に見える表現を入れない。",
             "- 在宅投稿は完全在宅求人として書き、「完全在宅」と「未経験OK」を必ず入れる。",
@@ -2330,6 +2531,7 @@ def build_post_generation_prompt(
             "- emoji_level が none の対象では絵文字を使わない。light / medium / expressive は emoji_instruction に従い、求人投稿として自然な範囲にする。",
             "- 過去バッチの冒頭と似た書き出しを避ける。",
             *validation_repair_notes,
+            *retry_notes,
             "",
             f"バッチ: {batch_index}/{batch_total}",
             "過去バッチで使った冒頭:",
@@ -2384,25 +2586,58 @@ def parse_generated_posts(stdout: str, targets: list[dict[str, Any]]) -> dict[st
     return generated
 
 
+def post_validation_issues(target: dict[str, Any], text: str) -> list[str]:
+    cleaned = strip_markdown_markers(str(text or ""))
+    normalized = normalized_post_text(cleaned)
+    account_label = f"{target.get('account_name', '')} / {target.get('label', '')}".strip(" /")
+    prefix = f"{account_label}: " if account_label else ""
+    issues: list[str] = []
+    if not normalized:
+        issues.append(prefix + "投稿文が空です")
+        return issues
+    if "【公式LINEURL】" not in cleaned:
+        issues.append(prefix + "CTAの【公式LINEURL】がありません")
+    if re.search(r"https?://|lin\.ee|line\.me", cleaned, flags=re.IGNORECASE):
+        issues.append(prefix + "実URLらしき文字列があります")
+    if re.search(r"[#＃*＊]", str(text or "")):
+        issues.append(prefix + "Markdown装飾記号が残っています")
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if len(lines) < 4:
+        issues.append(prefix + "投稿文が短すぎて途中切れの可能性があります")
+    last_line = lines[-1] if lines else ""
+    if last_line and re.search(r"[、,，・/／:：「『（(［\[]$", last_line):
+        issues.append(prefix + "最後の行が途中で切れている可能性があります")
+    if last_line and len(last_line) <= 4 and "【公式LINEURL】" not in last_line:
+        issues.append(prefix + "最後の行が短すぎて途中切れの可能性があります")
+    bracket_pairs = [("「", "」"), ("『", "』"), ("（", "）"), ("(", ")"), ("【", "】"), ("[", "]")]
+    for opener, closer in bracket_pairs:
+        if cleaned.count(opener) > cleaned.count(closer):
+            issues.append(prefix + f"{opener}{closer} の閉じ忘れがあります")
+            break
+
+    kind = normalize_kind(str(target.get("kind") or ""))
+    if kind == "factory" and "完全在宅" in cleaned:
+        issues.append(prefix + "工場投稿文に完全在宅の表記があります")
+    if kind != "factory":
+        if "完全在宅" not in cleaned:
+            issues.append(prefix + "在宅投稿文に完全在宅の表記がありません")
+        if "未経験OK" not in cleaned:
+            issues.append(prefix + "在宅投稿文に未経験OKの表記がありません")
+    return issues
+
+
+def validate_post_text_or_raise(target: dict[str, Any], text: str) -> str:
+    cleaned = strip_markdown_markers(str(text or "").strip())
+    issues = post_validation_issues(target, cleaned)
+    if issues:
+        raise ValueError(" / ".join(issues))
+    return cleaned
+
+
 def validate_generated_post_text(target: dict[str, Any], text: str) -> str:
     raw_text = str(text or "").strip()
-    if re.search(r"[#＃*＊]", raw_text):
-        raise ValueError(f"Markdown装飾記号が残っています: {target['account_name']} / {target['label']}")
-    cleaned = strip_markdown_markers(raw_text)
-    if not normalized_post_text(cleaned):
-        raise ValueError(f"生成投稿文が空です: {target['account_name']} / {target['label']}")
-    if "【公式LINEURL】" not in cleaned:
-        raise ValueError(f"公式LINEプレースホルダーがありません: {target['account_name']} / {target['label']}")
-    if re.search(r"https?://|lin\.ee|line\.me", cleaned, flags=re.IGNORECASE):
-        raise ValueError(f"実URLらしき文字列があります: {target['account_name']} / {target['label']}")
-    if target["kind"] == "factory" and "完全在宅" in cleaned:
-        raise ValueError(f"工場投稿文に完全在宅の表記があります: {target['account_name']} / {target['label']}")
-    if target["kind"] != "factory":
-        if "完全在宅" not in cleaned:
-            raise ValueError(f"在宅投稿文に完全在宅の表記がありません: {target['account_name']} / {target['label']}")
-        if "未経験OK" not in cleaned:
-            raise ValueError(f"在宅投稿文に未経験OKの表記がありません: {target['account_name']} / {target['label']}")
-    return cleaned
+    return validate_post_text_or_raise(target, raw_text)
 
 
 def first_post_title(text: str) -> str:
@@ -2498,8 +2733,27 @@ def save_generated_posts(
         if task:
             task["prompt_text"] = str(bundle.get("image_prompt") or "")
             task["prompt_template_name"] = str(bundle.get("template_name") or "")
+            paths = resolve_task_paths(output_root, task)
+            item["prompt_path"] = paths["prompt"]
 
     write_json(output_root / "tasks.json", tasks)
+    for item in saved:
+        target = item["target"]
+        history_paths = [item["post_path"], output_root / "tasks.json"]
+        prompt_path = item.get("prompt_path")
+        if isinstance(prompt_path, Path):
+            history_paths.append(prompt_path)
+        item["history"] = commit_history_paths(
+            "post",
+            history_paths,
+            f"{target['account_name']} {target['label']}の投稿文を保存",
+            [
+                f"{rel_to_root(item['post_path'])} を保存しました。",
+                f"{target['label']}の投稿文を検証してから保存しました。",
+                "CTAと途中切れを確認済みです。",
+                "作業ブランチは切り替えず、script-save に履歴を残しました。",
+            ],
+        )
     return saved
 
 
@@ -2562,35 +2816,67 @@ def run_codex_post_generation_batch(prompt: str, job_id: str, batch_index: int, 
 
 def run_post_generation_job(job_id: str, output_root: Path, templates_dir: Path, targets: list[dict[str, Any]]) -> None:
     all_generated: dict[str, str] = {}
+    saved_items: list[dict[str, Any]] = []
     previous_hooks: list[str] = []
     materials = post_generation_materials()
-    batch_size = max(1, POST_GENERATION_BATCH_SIZE)
-    batches = [targets[index : index + batch_size] for index in range(0, len(targets), batch_size)]
+    batches = [[target] for target in targets]
     try:
         update_job(job_id, phase="プロンプト準備中", progress=8, validation_total=len(targets))
         for index, batch in enumerate(batches, start=1):
-            prompt = build_post_generation_prompt(batch, materials, index, len(batches), previous_hooks)
-            update_job(job_id, phase=f"Codexへ送信中 {index}/{len(batches)}", progress=12, batch_index=index, batch_total=len(batches))
-            stdout, stderr, returncode = run_codex_post_generation_batch(prompt, job_id, index, len(batches))
-            update_job(job_id, returncode=returncode, stdout=stdout[-12000:], stderr=stderr[-6000:], phase="生成結果を検証中", progress=90)
-            if returncode != 0:
-                raise RuntimeError(stderr.strip() or stdout.strip() or f"codex exec exited with {returncode}")
-            generated = parse_generated_posts(stdout, batch)
+            generated: dict[str, str] = {}
+            validation_feedback = ""
+            last_stdout = ""
+            last_stderr = ""
+            for attempt in range(1, POST_VALIDATION_MAX_ATTEMPTS + 1):
+                prompt = build_post_generation_prompt(batch, materials, index, len(batches), previous_hooks, validation_feedback)
+                attempt_label = f"{index}/{len(batches)}" if POST_VALIDATION_MAX_ATTEMPTS == 1 else f"{index}/{len(batches)} 試行{attempt}/{POST_VALIDATION_MAX_ATTEMPTS}"
+                update_job(
+                    job_id,
+                    phase=f"Codexへ送信中 {attempt_label}",
+                    progress=min(88, 12 + int(((index - 1) / max(len(batches), 1)) * 72)),
+                    batch_index=index,
+                    batch_total=len(batches),
+                )
+                stdout, stderr, returncode = run_codex_post_generation_batch(prompt, job_id, index, len(batches))
+                last_stdout = stdout
+                last_stderr = stderr
+                update_job(job_id, returncode=returncode, stdout=stdout[-12000:], stderr=stderr[-6000:], phase="生成結果を検証中", progress=90)
+                if returncode != 0:
+                    raise RuntimeError(stderr.strip() or stdout.strip() or f"codex exec exited with {returncode}")
+                try:
+                    generated = parse_generated_posts(stdout, batch)
+                    for target in batch:
+                        cleaned = validate_generated_post_text(target, generated[target["target_id"]])
+                        generated[target["target_id"]] = cleaned
+                    next_generated = {**all_generated, **generated}
+                    validate_unique_generated_titles(targets, next_generated)
+                    break
+                except Exception as exc:
+                    if attempt >= POST_VALIDATION_MAX_ATTEMPTS:
+                        raise
+                    validation_feedback = "\n".join(
+                        [
+                            str(exc),
+                            "",
+                            "前回出力:",
+                            short_context_text(stdout, 3000),
+                        ]
+                    )
+                    update_job(job_id, phase="検証NGのため再作成中", stderr=str(exc)[-6000:])
+
             for target in batch:
-                cleaned = validate_generated_post_text(target, generated[target["target_id"]])
-                generated[target["target_id"]] = cleaned
+                cleaned = generated[target["target_id"]]
                 first_line = first_post_title(cleaned)
                 if first_line:
                     previous_hooks.append(f"{target['label']} / {first_line[:90]}")
             all_generated.update(generated)
-            validate_unique_generated_titles(targets, all_generated)
-            update_job(job_id, validation_done=len(all_generated), generated_post_count=len(all_generated))
+            update_job(job_id, phase="ローカルへ上書き保存中", progress=94)
+            saved_items.extend(save_generated_posts(output_root, templates_dir, batch, generated))
+            update_job(job_id, validation_done=len(all_generated), generated_post_count=len(all_generated), stdout=last_stdout[-12000:], stderr=last_stderr[-6000:])
 
-        update_job(job_id, phase="ローカルへ上書き保存中", progress=94)
-        saved = save_generated_posts(output_root, templates_dir, targets, all_generated)
         summary_lines = [
             f"{item['target']['account_name']} / {item['target']['label']} -> {rel_to_root(item['post_path'])}"
-            for item in saved
+            for item in saved_items
         ]
         update_job(
             job_id,
@@ -2599,7 +2885,7 @@ def run_post_generation_job(job_id: str, output_root: Path, templates_dir: Path,
             phase="ローカル保存済み",
             finished_at=display_time(),
             generated=True,
-            generated_post_count=len(saved),
+            generated_post_count=len(saved_items),
             stdout="\n".join(summary_lines)[-12000:],
             stderr="",
         )
@@ -3093,6 +3379,106 @@ def slot_image_path(output_root: Path, account_name: str, kind: str) -> Path:
     return resolve_task_paths(output_root, task)["image"] if task else image_path_for_slot(output_root, account_name, kind)
 
 
+def slot_post_path(output_root: Path, account_name: str, kind: str) -> Path:
+    task = task_for_slot(output_root, account_name, kind)
+    return resolve_task_paths(output_root, task)["post"] if task else output_root / sanitize_name(account_name, "account") / POST_FILENAMES[kind]
+
+
+def update_task_post_text(output_root: Path, account_name: str, kind: str, text: str) -> None:
+    tasks = load_tasks(output_root)
+    task = None
+    for item in tasks:
+        if normalize_account_name(item.get("account_name")) == normalize_account_name(account_name) and normalize_kind(str(item.get("kind"))) == kind:
+            task = item
+            break
+    if not task:
+        task = create_task_for_target(
+            {
+                "account_name": account_name,
+                "account_no": "",
+                "row_idx": 0,
+                "kind": kind,
+                "post_col": "",
+                "image_col": DEFAULT_IMAGE_COLUMNS.get(kind, ""),
+                "region": "",
+            },
+            text,
+        )
+        tasks.append(task)
+    task["post_text"] = text
+    task["salary_text"] = extract_post_salary_text(text, kind)
+    write_json(output_root / "tasks.json", tasks)
+
+
+def restore_slot_history(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    history_type = str(payload.get("history_type") or payload.get("type") or "").strip()
+    account_name = str(payload.get("account_name") or "").strip()
+    kind = normalize_kind(str(payload.get("kind") or ""))
+    commit = str(payload.get("commit") or "").strip()
+    if history_type not in {"post", "image"}:
+        raise ValueError("履歴種別が不正です")
+    if not account_name or kind not in EXPECTED_IMAGE_FILENAMES:
+        raise ValueError("アカウント名または種別が不正です")
+
+    if history_type == "post":
+        post_path = slot_post_path(output_root, account_name, kind)
+        text = git_blob_bytes(commit, post_path).decode("utf-8", errors="replace").strip()
+        if not text:
+            raise ValueError("復元する投稿文が空です")
+        post_path.parent.mkdir(parents=True, exist_ok=True)
+        post_path.write_text(text + "\n", encoding="utf-8")
+        update_task_post_text(output_root, account_name, kind, text)
+        validation_issues = post_validation_issues({"account_name": account_name, "kind": kind, "label": LABELS[kind]}, text)
+        history = commit_history_paths(
+            "post",
+            [post_path, output_root / "tasks.json"],
+            f"{account_name} {LABELS[kind]}の投稿文を履歴から復元",
+            [
+                f"{commit[:12]} から {rel_to_root(post_path)} を復元しました。",
+                "復元後の状態も script-save に履歴として残しました。",
+                "作業ブランチは切り替えていません。",
+            ],
+        )
+        return {
+            "restored": True,
+            "type": history_type,
+            "account_name": account_name,
+            "kind": kind,
+            "path": rel_to_root(post_path),
+            "sourceCommit": commit,
+            "validationIssues": validation_issues,
+            "history": history,
+        }
+
+    image_path = slot_image_path(output_root, account_name, kind)
+    raw = git_blob_bytes(commit, image_path)
+    if not raw:
+        raise ValueError("復元する画像が空です")
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(raw)
+    mark_generated_image_pending(account_name, kind, image_path)
+    history = commit_history_paths(
+        "image",
+        [image_path, APPROVALS_PATH],
+        f"{account_name} {LABELS[kind]}の画像を履歴から復元",
+        [
+            f"{commit[:12]} から {rel_to_root(image_path)} を復元しました。",
+            "復元後の状態も image-save に履歴として残しました。",
+            "作業ブランチは切り替えていません。",
+        ],
+    )
+    return {
+        "restored": True,
+        "type": history_type,
+        "account_name": account_name,
+        "kind": kind,
+        "path": rel_to_root(image_path),
+        "image_url": file_url(image_path),
+        "sourceCommit": commit,
+        "history": history,
+    }
+
+
 def save_slot_image(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     account_name = str(payload.get("account_name") or "").strip()
     kind = normalize_kind(str(payload.get("kind") or ""))
@@ -3122,7 +3508,17 @@ def save_slot_image(output_root: Path, payload: dict[str, Any]) -> dict[str, Any
         "image_path": rel_to_root(image_path),
     }
     write_json(APPROVALS_PATH, approvals)
-    return {"saved": True, "image_path": rel_to_root(image_path), "image_url": file_url(image_path)}
+    history = commit_history_paths(
+        "image",
+        [image_path, APPROVALS_PATH],
+        f"{account_name} {LABELS[kind]}の画像を保存",
+        [
+            f"{rel_to_root(image_path)} を保存しました。",
+            "画像の確認状態を未承認に戻しました。",
+            "作業ブランチは切り替えず、image-save に履歴を残しました。",
+        ],
+    )
+    return {"saved": True, "image_path": rel_to_root(image_path), "image_url": file_url(image_path), "history": history}
 
 
 def approve_slot(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3919,6 +4315,16 @@ def run_codex_image_generation_job(
             raise FileNotFoundError(f"生成画像が更新されませんでした: {image_path}")
 
         mark_generated_image_pending(account_name, kind, image_path)
+        history = commit_history_paths(
+            "image",
+            [image_path, image_path.parent / PROMPT_FILENAMES[kind], APPROVALS_PATH],
+            f"{account_name} {LABELS[kind]}の画像を生成",
+            [
+                f"{rel_to_root(image_path)} を保存しました。",
+                "画像生成が完了した時点で履歴に残しました。",
+                "作業ブランチは切り替えず、image-save に履歴を残しました。",
+            ],
+        )
         update_job(
             job_id,
             status="done",
@@ -3927,7 +4333,7 @@ def run_codex_image_generation_job(
             finished_at=display_time(),
             generated=True,
             image_path=rel_to_root(image_path) if path_in_root(image_path) else str(image_path),
-            stdout="".join(stdout_lines[-80:])[-6000:],
+            stdout=("\n".join(["".join(stdout_lines[-80:])[-6000:], json.dumps({"history": history}, ensure_ascii=False)])).strip()[-6000:],
             stderr="".join(stderr_lines[-80:])[-6000:],
         )
     except Exception as exc:
@@ -4931,6 +5337,8 @@ def build_post_rewrite_prompt(payload: dict[str, Any], field_info: dict[str, str
             "- 1行目は投稿タイトルとして扱う。1行目にはタイトル本文だけを書き、「タイトル:」などの接頭辞は付けない",
             "- 1行目タイトルは、今回の制作方向に合わせてその都度違う切り口で新しく書く",
             "- シャープ記号やアスタリスク記号などのMarkdown装飾は使わない。箇条書きの行頭ハイフンだけ使用可",
+            "- CTAとして【公式LINEURL】を必ず残し、投稿文を途中で切らず最後の行まで完結させる",
+            "- 最後の行を読点、コロン、開き括弧、短すぎる断片で終わらせない",
             "- emoji_level が none の場合は絵文字を使わない。light / medium / expressive の場合は求人投稿として自然な範囲で使う",
             "- ユーザー指示と今回の制作方向が矛盾する場合は、ユーザー指示を優先する",
             "",
@@ -4970,93 +5378,119 @@ def build_post_rewrite_prompt(payload: dict[str, Any], field_info: dict[str, str
     return "\n".join(parts)
 
 
-def run_post_rewrite_job(job_id: str, prompt: str) -> None:
-    stdout_lines: list[str] = []
-    stderr_lines: list[str] = []
-    process: subprocess.Popen[str] | None = None
-    try:
-        started = time.time()
-        update_job(job_id, phase="Codexへ送信中", progress=14)
-        command = [
-            *codex_exec_base_command("read-only"),
-            "-",
-        ]
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            env=os.environ.copy(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
-        assert process.stdin is not None
-        process.stdin.write(prompt)
-        process.stdin.close()
+def run_post_rewrite_job(job_id: str, prompt: str, validation_target: dict[str, Any]) -> None:
+    last_stdout = ""
+    last_stderr = ""
+    last_returncode: int | None = None
+    current_prompt = prompt
+    for attempt in range(1, POST_VALIDATION_MAX_ATTEMPTS + 1):
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        process: subprocess.Popen[str] | None = None
+        try:
+            started = time.time()
+            update_job(job_id, phase=f"Codexへ送信中 {attempt}/{POST_VALIDATION_MAX_ATTEMPTS}", progress=14)
+            command = [
+                *codex_exec_base_command("read-only"),
+                "-",
+            ]
+            process = subprocess.Popen(
+                command,
+                cwd=ROOT,
+                env=os.environ.copy(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            assert process.stdin is not None
+            process.stdin.write(current_prompt)
+            process.stdin.close()
 
-        def drain(stream: Any, sink: list[str]) -> None:
-            for line in iter(stream.readline, ""):
-                sink.append(line)
-            stream.close()
+            def drain(stream: Any, sink: list[str]) -> None:
+                for line in iter(stream.readline, ""):
+                    sink.append(line)
+                stream.close()
 
-        readers = []
-        for stream, sink in ((process.stdout, stdout_lines), (process.stderr, stderr_lines)):
-            if stream is None:
-                continue
-            reader = threading.Thread(target=drain, args=(stream, sink), daemon=True)
-            reader.start()
-            readers.append(reader)
+            readers = []
+            for stream, sink in ((process.stdout, stdout_lines), (process.stderr, stderr_lines)):
+                if stream is None:
+                    continue
+                reader = threading.Thread(target=drain, args=(stream, sink), daemon=True)
+                reader.start()
+                readers.append(reader)
 
-        while process.poll() is None:
-            elapsed = time.time() - started
-            if elapsed > CODEX_REWRITE_TIMEOUT_SECONDS:
-                process.kill()
-                raise TimeoutError(f"AIリライトが {CODEX_REWRITE_TIMEOUT_SECONDS} 秒以内に完了しませんでした")
-            partial = clean_rewrite_text("".join(stdout_lines))
+            while process.poll() is None:
+                elapsed = time.time() - started
+                if elapsed > CODEX_REWRITE_TIMEOUT_SECONDS:
+                    process.kill()
+                    raise TimeoutError(f"AIリライトが {CODEX_REWRITE_TIMEOUT_SECONDS} 秒以内に完了しませんでした")
+                partial = clean_rewrite_text("".join(stdout_lines))
+                update_job(
+                    job_id,
+                    phase="AIでリライト中",
+                    progress=min(88, 24 + int(elapsed // 5) * 5),
+                    stdout=partial[-12000:],
+                    stderr="".join(stderr_lines[-80:])[-6000:],
+                )
+                time.sleep(1.5)
+
+            for reader in readers:
+                reader.join(timeout=1)
+            last_stdout = "".join(stdout_lines)
+            last_stderr = "".join(stderr_lines)
+            last_returncode = process.returncode
+            rewritten = clean_rewrite_text(last_stdout)
+            update_job(job_id, returncode=last_returncode, stdout=rewritten[-12000:], stderr=last_stderr[-6000:], phase="結果確認中", progress=94)
+            if last_returncode != 0:
+                raise RuntimeError(last_stderr.strip() or last_stdout.strip() or f"codex exec exited with {last_returncode}")
+            if not rewritten:
+                raise ValueError("AIリライト結果が空でした")
+            rewritten = validate_post_text_or_raise(validation_target, rewritten)
             update_job(
                 job_id,
-                phase="AIでリライト中",
-                progress=min(88, 24 + int(elapsed // 5) * 5),
-                stdout=partial[-12000:],
-                stderr="".join(stderr_lines[-80:])[-6000:],
+                status="done",
+                progress=100,
+                phase="検証OK・編集欄へ反映済み",
+                finished_at=display_time(),
+                rewritten_text=rewritten,
+                stdout=rewritten[-12000:],
+                stderr=last_stderr[-6000:],
             )
-            time.sleep(1.5)
-
-        for reader in readers:
-            reader.join(timeout=1)
-        stdout = "".join(stdout_lines)
-        stderr = "".join(stderr_lines)
-        returncode = process.returncode
-        rewritten = clean_rewrite_text(stdout)
-        update_job(job_id, returncode=returncode, stdout=rewritten[-12000:], stderr=stderr[-6000:], phase="結果確認中", progress=94)
-        if returncode != 0:
-            raise RuntimeError(stderr.strip() or stdout.strip() or f"codex exec exited with {returncode}")
-        if not rewritten:
-            raise ValueError("AIリライト結果が空でした")
-        update_job(
-            job_id,
-            status="done",
-            progress=100,
-            phase="編集欄へ反映済み",
-            finished_at=display_time(),
-            rewritten_text=rewritten,
-            stdout=rewritten[-12000:],
-            stderr=stderr[-6000:],
-        )
-    except Exception as exc:
-        if process and process.poll() is None:
-            process.kill()
-        update_job(
-            job_id,
-            status="failed",
-            progress=100,
-            phase="失敗",
-            finished_at=display_time(),
-            returncode=process.returncode if process else None,
-            stdout=clean_rewrite_text("".join(stdout_lines))[-12000:],
-            stderr=("".join(stderr_lines[-80:]) + "\n" + str(exc))[-6000:],
-        )
+            return
+        except Exception as exc:
+            if process and process.poll() is None:
+                process.kill()
+            if attempt < POST_VALIDATION_MAX_ATTEMPTS:
+                current_prompt = "\n".join(
+                    [
+                        prompt,
+                        "",
+                        "前回リライト案の検証NG:",
+                        str(exc),
+                        "",
+                        "前回リライト案:",
+                        "```text",
+                        short_context_text(clean_rewrite_text(last_stdout), 3000),
+                        "```",
+                        "",
+                        "上の問題を直し、CTAと文末まで完成した投稿文だけを再出力してください。",
+                    ]
+                )
+                update_job(job_id, phase="検証NGのためリライト再試行中", stderr=str(exc)[-6000:])
+                continue
+            update_job(
+                job_id,
+                status="failed",
+                progress=100,
+                phase="失敗",
+                finished_at=display_time(),
+                returncode=last_returncode,
+                stdout=clean_rewrite_text(last_stdout)[-12000:],
+                stderr=(last_stderr + "\n" + str(exc))[-6000:],
+            )
+            return
 
 
 def start_post_rewrite(payload: dict[str, Any]) -> Job:
@@ -5091,7 +5525,12 @@ def start_post_rewrite(payload: dict[str, Any]) -> Job:
     )
     with jobs_lock:
         jobs[job.id] = job
-    threading.Thread(target=run_post_rewrite_job, args=(job.id, prompt), daemon=True).start()
+    validation_target = {
+        "account_name": str(payload.get("account_name") or ""),
+        "kind": slot_kind_for_post_field(field_key),
+        "label": field_info["label"],
+    }
+    threading.Thread(target=run_post_rewrite_job, args=(job.id, prompt, validation_target), daemon=True).start()
     return job
 
 
@@ -5172,6 +5611,8 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "result": sync_post_to_sheet(self.output_root, payload)})
             elif parsed.path == "/api/post/sheet-sync-all":
                 self.send_json({"ok": True, "result": sync_dirty_posts_to_sheet(self.output_root, payload)})
+            elif parsed.path == "/api/history/restore":
+                self.send_json({"ok": True, "result": restore_slot_history(self.output_root, payload)})
             elif parsed.path == "/api/prompt":
                 self.send_json({"ok": True, "result": save_prompt(self.output_root, payload)})
             elif parsed.path == "/api/template":
@@ -8022,6 +8463,41 @@ INDEX_HTML = r"""<!doctype html>
       max-height: 260px;
       overflow: auto;
     }
+    .history-list {
+      display: grid;
+      gap: 10px;
+    }
+    .history-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fff;
+    }
+    .history-item-main {
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+    }
+    .history-item-title {
+      font-weight: 750;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .history-item-meta {
+      color: var(--muted);
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-wrap: anywhere;
+    }
+    .history-item-preview {
+      color: #344054;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
     .empty {
       color: var(--muted);
       border: 1px dashed var(--line);
@@ -9016,6 +9492,22 @@ INDEX_HTML = r"""<!doctype html>
       <button class="primary" id="save-post" data-icon="save">保存</button>
     </div>
   </dialog>
+  <dialog id="history-dialog">
+    <div class="modal-head">
+      <div class="modal-title-block">
+        <span class="modal-kicker">生成履歴</span>
+        <strong id="history-title">履歴</strong>
+        <p class="modal-subtitle" id="history-subtitle">保存済みの履歴から復元できます。</p>
+      </div>
+      <button class="modal-close" id="close-history-dialog" data-icon="close">閉じる</button>
+    </div>
+    <div class="modal-body">
+      <div id="history-list" class="history-list"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="refresh-history-dialog" data-icon="refresh">最新状態取得</button>
+    </div>
+  </dialog>
   <dialog id="sheet-editor" class="sheet-dialog">
     <div class="modal-head">
       <div class="modal-title-block">
@@ -9219,6 +9711,7 @@ INDEX_HTML = r"""<!doctype html>
       data: null,
       editSlot: null,
       imageSlot: null,
+      historyTarget: null,
       sheetEdit: null,
       inlinePostEdit: null,
       rewriteTarget: null,
@@ -11371,6 +11864,7 @@ INDEX_HTML = r"""<!doctype html>
         ? `
           <div class="media-actions">
             <button class="primary" onclick='generateImage(${arg(account.account_name)}, ${arg(slot.kind)}, this)' data-icon="auto_awesome">${esc(generateLabel)}</button>
+            <button onclick='openHistory(${arg(account.account_name)}, ${arg(slot.kind)}, "image")' data-icon="history">画像履歴</button>
             ${slot.image_exists
               ? `<button class="danger" onclick='cancelImage(${arg(account.account_name)}, ${arg(slot.kind)}, this)' data-icon="delete">画像登録取消</button>`
               : `<button onclick='pickImage(${arg(account.account_name)}, ${arg(slot.kind)})' data-icon="upload_file">画像取込</button>`}
@@ -11407,6 +11901,7 @@ INDEX_HTML = r"""<!doctype html>
           <div class="post-actions">
             <button onclick='prepareSlot(${arg(account.account_name)}, ${arg(slot.kind)}, this)' data-icon="edit_note" ${slot.empty || job || postJob ? "disabled" : ""}>${postJob ? "投稿文生成中" : "投稿文を再作成"}</button>
             <button onclick='openEditor(${arg(account.account_name)}, ${arg(slot.kind)}, "post")' data-icon="article" ${slot.empty ? "disabled" : ""}>投稿文編集</button>
+            <button onclick='openHistory(${arg(account.account_name)}, ${arg(slot.kind)}, "post")' data-icon="history" ${slot.empty ? "disabled" : ""}>投稿文履歴</button>
             <button onclick='syncPostToSheet(${arg(account.account_name)}, ${arg(slot.kind)}, this)' data-icon="cloud_upload" ${syncable ? "" : "disabled"}>スプレッドシートに反映</button>
             <button onclick='openEditor(${arg(account.account_name)}, ${arg(slot.kind)}, "prompt")' data-icon="description" ${slot.empty ? "disabled" : ""}>画像プロンプト編集</button>
           </div>
@@ -11857,6 +12352,83 @@ INDEX_HTML = r"""<!doctype html>
     function findSlot(accountName, kind) {
       const account = state.data.accounts.find((item) => item.account_name === accountName);
       return account ? slotFor(account, kind) : null;
+    }
+
+    function historyEntries(slot, type) {
+      return type === "image" ? (slot?.image_history || []) : (slot?.post_history || []);
+    }
+
+    function historyLabel(type) {
+      return type === "image" ? "画像" : "投稿文";
+    }
+
+    function formatHistoryDate(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value || "";
+      return new Intl.DateTimeFormat("ja-JP", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
+    }
+
+    function renderHistoryDialog() {
+      const target = state.historyTarget;
+      if (!target) return;
+      const slot = findSlot(target.accountName, target.kind);
+      const entries = historyEntries(slot, target.type);
+      $("history-title").textContent = `${target.accountName} / ${slot?.label || target.kind} / ${historyLabel(target.type)}履歴`;
+      $("history-subtitle").textContent = `${entries.length}件の保存履歴があります。復元してもスプレッドシート反映は別ボタンです。`;
+      $("history-list").innerHTML = entries.length ? entries.map((entry) => `
+        <article class="history-item">
+          <div class="history-item-main">
+            <div class="history-item-title">${esc(entry.title || entry.subject || `${historyLabel(target.type)}履歴`)}</div>
+            <div class="history-item-meta">${esc(formatHistoryDate(entry.committedAt))} / ${esc(entry.branch || "")} / ${esc(entry.shortCommit || "")}</div>
+            ${entry.preview ? `<div class="history-item-preview">${esc(entry.preview)}</div>` : ""}
+          </div>
+          <button onclick='restoreHistory(${arg(entry.commit)}, this)' data-icon="restore">復元</button>
+        </article>
+      `).join("") : `<div class="empty">まだ履歴がありません。生成または保存するとここに表示されます。</div>`;
+    }
+
+    function openHistory(accountName, kind, type) {
+      state.historyTarget = { accountName, kind, type };
+      renderHistoryDialog();
+      $("history-dialog").showModal();
+    }
+
+    async function restoreHistory(commit, button = null) {
+      const target = state.historyTarget;
+      if (!target) return;
+      const label = historyLabel(target.type);
+      if (!confirm(`${target.accountName} / ${label} を選択した履歴へ戻します。\n現在のローカルファイルは上書きされます。続行しますか？`)) return;
+      try {
+        if (button) {
+          button.disabled = true;
+          button.dataset.loading = "true";
+        }
+        const data = await api("/api/history/restore", {
+          method: "POST",
+          body: JSON.stringify({
+            history_type: target.type,
+            account_name: target.accountName,
+            kind: target.kind,
+            commit,
+          }),
+        });
+        const issues = data.result?.validationIssues || [];
+        toast(issues.length ? `${label}を復元しました。確認事項があります` : `${label}を履歴から復元しました`);
+        await refresh();
+        renderHistoryDialog();
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+        }
+      }
     }
 
     async function prepareSlot(accountName, kind, button) {
@@ -12622,6 +13194,14 @@ INDEX_HTML = r"""<!doctype html>
     window.visualViewport?.addEventListener("resize", syncHeaderHeight);
     window.visualViewport?.addEventListener("resize", syncAccountSlotValidationHeights);
     $("close-editor").addEventListener("click", () => $("editor").close());
+    $("close-history-dialog").addEventListener("click", () => $("history-dialog").close());
+    $("refresh-history-dialog").addEventListener("click", async () => {
+      await refresh();
+      renderHistoryDialog();
+    });
+    $("history-dialog").addEventListener("close", () => {
+      state.historyTarget = null;
+    });
     $("save-post").addEventListener("click", savePost);
     $("sync-post-sheet").addEventListener("click", (event) => syncOpenPostToSheet(event.currentTarget));
     $("copy-editor").addEventListener("click", () => copyText($("editor-text").value));
