@@ -23,6 +23,7 @@ Use a vivid pink and white ad-style background with sweeping diagonal light trai
 Add gold or yellow gradient treatment to the salary text, with thick white and magenta outlines plus a subtle dark drop shadow for strong contrast.
 Use bold Japanese display typography with clean edges, heavy outlines, and large spacing between text groups so the banner remains readable on a smartphone.
 Keep the layout dense and promotional, but avoid clutter that makes the text hard to read.
+Use a realistic or semi-realistic home-office raster scene with texture, lighting, and depth. Do not make the design look like SVG, vector art, flat illustration, or a template assembled from geometric shapes.
 
 Layout:
 Place the salary text across the left or center-left as the main visual anchor.
@@ -46,5 +47,5 @@ Do not use helmets, work uniforms, machinery, assembly lines, or factory interio
 Avoid:
 Do not include strong CTA or button-like main messages such as 「クリックして」「ボタンで」「LINEで」「今すぐ応募」.
 Do not include LINE URLs, QR codes, real company names, real logos, watermarks, app logos, or brand marks.
-Do not include tiny text, long paragraphs, low-contrast text, broken Japanese typography, fake UI buttons, or unreadable decorative lettering.
+Do not include tiny text, long paragraphs, low-contrast text, broken Japanese typography, fake UI buttons, unreadable decorative lettering, SVG-like geometry, flat vector people, icon packs, or line-art-only scenes.
 Do not contradict the job post details; salary, region, and work conditions must match the provided placeholders.

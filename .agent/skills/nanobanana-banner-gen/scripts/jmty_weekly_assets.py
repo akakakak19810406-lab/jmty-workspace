@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import ssl
 import sys
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +28,7 @@ DEFAULT_OUTPUT_ROOT = Path("outputs/jmty-weekly/current")
 DEFAULT_PROMPT_TEMPLATES_DIR = Path("inputs/jmty_image_prompt_templates")
 FACTORY_CASES_PATH = Path(os.environ.get("JMTY_FACTORY_CASES_PATH", "inputs/jmty_factory_cases/2026-02_案件一覧.md"))
 SHEET_CACHE_PATH = Path("outputs/jmty-gui/sheet_cache.json")
+GUI_IMAGE_VALIDATION_PATH = Path("outputs/jmty-gui/image_validation.json")
 
 FACTORY_REGION_INDEX = 7   # H
 FACTORY_IMAGE_COL = "I"
@@ -42,6 +45,7 @@ IMPROVEMENT_REPORT_DIRNAME = "_improvement_reports"
 DISCORD_JMTY_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_JMTY_WEBHOOK_URL"
 DISCORD_JMTY_WEBHOOK_PATH = Path("config") / "discord-jmty-webhook.json"
 DISCORD_CONTENT_LIMIT = 1900
+OCR_TIMEOUT_SECONDS = int(os.environ.get("JMTY_OCR_TIMEOUT_SECONDS", "45") or "45")
 
 EXPECTED_IMAGE_FILENAMES = {
     "factory": "工場.jpg",
@@ -51,6 +55,8 @@ EXPECTED_IMAGE_FILENAMES = {
 
 FACTORY_OCR_HINTS = ("工場", "製造", "月収", "寮", "ライン", "高収入")
 REMOTE_OCR_HINTS = ("在宅", "リモート", "自宅", "PC", "文章", "ライター", "オンライン")
+FACTORY_KIND_OCR_HINTS = ("工場", "製造", "寮", "ライン", "組立", "検査", "部品", "軽作業", "倉庫")
+REMOTE_KIND_OCR_HINTS = ("在宅", "リモート", "自宅", "PC", "文章", "ライター", "オンライン", "データ入力", "SNS", "通勤なし")
 SHEET_POST_VALIDATION_MIN_LENGTH = 140
 
 
@@ -414,6 +420,31 @@ def upload_drive_file(file_path: Path, parent_id: str) -> str:
     return res["id"]
 
 
+def update_drive_file(file_path: Path, file_id: str) -> str:
+    res = run_gws(
+        [
+            "drive",
+            "files",
+            "update",
+            "--params",
+            json.dumps({"fileId": file_id}, ensure_ascii=False),
+            "--upload",
+            str(file_path),
+            "--json",
+            json.dumps({"name": file_path.name}, ensure_ascii=False),
+        ]
+    )
+    return str(res.get("id") or file_id)
+
+
+def compact_gws_error(exc: BaseException) -> str:
+    text = str(exc).strip()
+    if "The user does not have sufficient permissions for this file" in text:
+        return "このファイルへの更新/削除権限がありません"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else str(exc)
+
+
 def delete_drive_files_by_name(parent_id: str, name: str) -> None:
     res = run_gws(
         [
@@ -461,6 +492,72 @@ def drive_manifest_key(task: dict) -> str:
     return f"{task['account_name']}::{task['kind']}"
 
 
+def emit_progress(percent: int, message: str) -> None:
+    safe_percent = max(0, min(100, int(percent)))
+    print(f"[progress] {safe_percent}% {message}", flush=True)
+
+
+def image_validation_key(account_name: str, kind: str) -> str:
+    return f"{account_name}::{kind}"
+
+
+def load_gui_image_validations() -> dict[str, dict]:
+    path = Path.cwd() / GUI_IMAGE_VALIDATION_PATH
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {str(key): value for key, value in loaded.items() if isinstance(value, dict)}
+
+
+def post_hash(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def image_mtime(path: Path) -> int:
+    try:
+        return int(path.stat().st_mtime)
+    except OSError:
+        return 0
+
+
+def image_ocr_prevalidated(
+    task: dict,
+    image_path: Path,
+    post_text: str,
+    image_validations: dict[str, dict],
+) -> bool:
+    item = image_validations.get(image_validation_key(str(task.get("account_name") or ""), str(task.get("kind") or "")))
+    if not isinstance(item, dict):
+        return False
+    if item.get("source") == "post-validation":
+        return False
+    if str(item.get("status") or "") not in {"ok", "acknowledged"}:
+        return False
+    saved_image_mtime = int(item.get("image_mtime") or 0)
+    saved_post_hash = str(item.get("post_hash") or "")
+    return bool(
+        saved_image_mtime
+        and saved_post_hash
+        and saved_image_mtime == image_mtime(image_path)
+        and saved_post_hash == post_hash(post_text)
+    )
+
+
+def resolve_ocr_workers(requested_workers: int | None, target_count: int) -> int:
+    if target_count <= 1:
+        return 1
+    if requested_workers and requested_workers > 0:
+        return max(1, min(target_count, requested_workers))
+    cpu_count = os.cpu_count() or 4
+    return max(2, min(target_count, cpu_count, 6))
+
+
 def load_drive_sync_manifest(output_root: Path) -> dict:
     path = output_root / DRIVE_SYNC_MANIFEST_FILENAME
     if not path.exists():
@@ -483,7 +580,6 @@ def write_drive_sync_manifest(output_root: Path, manifest: dict) -> None:
 
 
 def delete_drive_image_files(parent_id: str) -> int:
-    name_filters = " or ".join(f"name contains '{ext}'" for ext in sorted(IMAGE_EXTENSIONS))
     res = run_gws(
         [
             "drive",
@@ -492,10 +588,7 @@ def delete_drive_image_files(parent_id: str) -> int:
             "--params",
             json.dumps(
                 {
-                    "q": (
-                        f"'{parent_id}' in parents and trashed = false and "
-                        f"(mimeType contains 'image/' or {name_filters})"
-                    ),
+                    "q": f"'{parent_id}' in parents and trashed = false",
                     "fields": "files(id,name,mimeType)",
                     "pageSize": 1000,
                 },
@@ -504,20 +597,35 @@ def delete_drive_image_files(parent_id: str) -> int:
         ]
     )
     deleted = 0
+    skipped: list[str] = []
     for file in res.get("files", []):
+        name = str(file.get("name") or "")
+        mime_type = str(file.get("mimeType") or "")
+        if not (mime_type.startswith("image/") or Path(name).suffix.lower() in IMAGE_EXTENSIONS):
+            continue
         try:
             delete_drive_file(file["id"])
             deleted += 1
         except JmtyWeeklyAssetsError as exc:
-            print(f"⚠️ Drive画像を削除できないためスキップします: {file.get('name')} / {exc}")
+            skipped.append(f"{name} ({compact_gws_error(exc)})")
+    if skipped:
+        shown = " / ".join(skipped[:5])
+        suffix = f" ほか{len(skipped) - 5}件" if len(skipped) > 5 else ""
+        print(f"⚠️ Drive画像 {len(skipped)}件は削除権限がないためスキップします: {shown}{suffix}", flush=True)
     return deleted
 
 
 def replace_drive_file(file_path: Path, parent_id: str) -> str:
-    try:
-        delete_drive_files_by_name(parent_id, file_path.name)
-    except JmtyWeeklyAssetsError as exc:
-        print(f"⚠️ Drive既存ファイルを削除できないため、新規アップロードに切り替えます: {file_path.name} / {exc}")
+    existing = find_drive_file_by_name(parent_id, file_path.name)
+    if existing and existing.get("id"):
+        try:
+            return update_drive_file(file_path, str(existing["id"]))
+        except JmtyWeeklyAssetsError as exc:
+            print(
+                f"⚠️ Drive既存ファイルを更新できないため、新規アップロードに切り替えます: "
+                f"{file_path.name} / {compact_gws_error(exc)}",
+                flush=True,
+            )
     return upload_drive_file(file_path, parent_id)
 
 
@@ -963,10 +1071,10 @@ def extract_role_phrase(source_text: str, task_kind: str) -> str:
     return "在宅ワーク"
 
 
-def source_text_prefers_image(task_kind: str, image_path: Path, fallback_text: str) -> str:
+def source_text_prefers_image(task_kind: str, image_path: Path, fallback_text: str, image_ocr_text: str | None = None) -> str:
     if not image_path.exists():
         return fallback_text
-    text = ocr_text(image_path)
+    text = image_ocr_text if image_ocr_text is not None else ocr_text(image_path)
     if not text:
         return fallback_text
     normalized = re.sub(r"\s+", "", text)
@@ -1742,45 +1850,49 @@ def expected_image_filename(task_kind: str) -> str:
 def ocr_text(file_path: Path) -> str:
     if shutil.which("tesseract") is None:
         return ""
-    result = subprocess.run(
-        ["tesseract", str(file_path), "stdout", "--psm", "6", "-l", "jpn+eng"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["tesseract", str(file_path), "stdout", "--psm", "6", "-l", "jpn+eng"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=OCR_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"⚠️ OCRがタイムアウトしたため種別検証をスキップします: {file_path}", file=sys.stderr, flush=True)
+        return ""
     if result.returncode not in (0, 1):
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     return result.stdout.strip()
 
 
-def validate_image_kind(file_path: Path, task_kind: str, account_name: str) -> None:
-    text = ocr_text(file_path)
+def validate_image_kind_text(text: str, task_kind: str, account_name: str, file_name: str) -> None:
     if not text:
         return
 
     normalized = re.sub(r"\s+", "", text)
-    factory_hits = sum(1 for hint in FACTORY_OCR_HINTS if hint in normalized)
-    remote_hits = sum(1 for hint in REMOTE_OCR_HINTS if hint in normalized)
+    factory_hits = sum(1 for hint in FACTORY_KIND_OCR_HINTS if hint in normalized)
+    remote_hits = sum(1 for hint in REMOTE_KIND_OCR_HINTS if hint in normalized)
 
     if task_kind == "factory":
         if "在宅" in normalized or "リモート" in normalized or remote_hits >= 2:
             raise RuntimeError(
-                f"画像種別の不整合を検出しました: {account_name} / 工場 で `{file_path.name}` に在宅系の語が多く含まれます。"
+                f"画像種別の不整合を検出しました: {account_name} / 工場 で `{file_name}` に在宅系の語が多く含まれます。"
             )
         if factory_hits == 0 and remote_hits >= 1:
             raise RuntimeError(
-                f"画像種別の不整合を検出しました: {account_name} / 工場 で `{file_path.name}` の OCR に工場系語が見当たりません。"
+                f"画像種別の不整合を検出しました: {account_name} / 工場 で `{file_name}` の OCR に工場系語が見当たりません。"
             )
     elif task_kind in {"remote1", "remote2"}:
         if "工場" in normalized or "製造" in normalized or factory_hits >= 2:
             raise RuntimeError(
-                f"画像種別の不整合を検出しました: {account_name} / 在宅 で `{file_path.name}` に工場系の語が多く含まれます。"
+                f"画像種別の不整合を検出しました: {account_name} / 在宅 で `{file_name}` に工場系の語が多く含まれます。"
             )
-        if remote_hits == 0 and factory_hits >= 1:
-            raise RuntimeError(
-                f"画像種別の不整合を検出しました: {account_name} / 在宅 で `{file_path.name}` の OCR に在宅系語が見当たりません。"
-            )
+
+
+def validate_image_kind(file_path: Path, task_kind: str, account_name: str) -> None:
+    validate_image_kind_text(ocr_text(file_path), task_kind, account_name, file_path.name)
 
 
 def validate_manifest_task(task: dict) -> None:
@@ -1803,9 +1915,15 @@ def validate_post_text(task: dict, post_text: str) -> None:
         raise RuntimeError(f"在宅投稿文に完全在宅の表記がありません: {task['account_name']} / {task['label_ja']}")
 
 
-def validate_task_files(output_root: Path, tasks: list[dict]) -> dict:
+def validate_task_files(output_root: Path, tasks: list[dict], ocr_workers: int | None = None) -> dict:
     checked = 0
     missing_images = []
+    image_validations = load_gui_image_validations()
+    ocr_targets: list[tuple[dict, Path]] = []
+    skipped_ocr_keys: set[str] = set()
+    ocr_text_by_key: dict[str, str] = {}
+
+    emit_progress(4, "投稿文・画像ファイル名を確認中")
     for task in tasks:
         validate_manifest_task(task)
         account_dir = output_root / task["folder_name"]
@@ -1816,11 +1934,54 @@ def validate_task_files(output_root: Path, tasks: list[dict]) -> dict:
         post_text = strip_markdown_markers(post_path.read_text(encoding="utf-8"))
         validate_post_text(task, post_text)
         if image_path.exists():
-            validate_image_kind(image_path, task["kind"], task["account_name"])
+            if image_ocr_prevalidated(task, image_path, post_text, image_validations):
+                skipped_ocr_keys.add(drive_manifest_key(task))
+            else:
+                ocr_targets.append((task, image_path))
         else:
             missing_images.append(str(image_path))
         checked += 1
-    return {"checked": checked, "missing_images": missing_images}
+
+    total_ocr = len(ocr_targets)
+    skipped_ocr = len(skipped_ocr_keys)
+    if total_ocr == 0:
+        emit_progress(18, f"OCR検証: 検証OK/確認済み {skipped_ocr}件をスキップ")
+        return {
+            "checked": checked,
+            "missing_images": missing_images,
+            "image_ocr_checked": 0,
+            "image_ocr_skipped": skipped_ocr,
+            "ocr_text_by_key": ocr_text_by_key,
+            "skipped_ocr_keys": list(skipped_ocr_keys),
+        }
+
+    workers = resolve_ocr_workers(ocr_workers, total_ocr)
+    emit_progress(10, f"OCR検証: {skipped_ocr}件スキップ / {total_ocr}件をOCRサブエージェント{workers}並列で確認")
+
+    def run_ocr_target(target: tuple[dict, Path]) -> tuple[str, str]:
+        task, image_path = target
+        text = ocr_text(image_path)
+        validate_image_kind_text(text, task["kind"], task["account_name"], image_path.name)
+        return drive_manifest_key(task), text
+
+    completed = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(run_ocr_target, target) for target in ocr_targets]
+        for future in as_completed(futures):
+            key, text = future.result()
+            ocr_text_by_key[key] = text
+            completed += 1
+            percent = 10 + int((completed / max(total_ocr, 1)) * 28)
+            emit_progress(percent, f"OCR検証: {completed}/{total_ocr}完了 / {workers}並列")
+
+    return {
+        "checked": checked,
+        "missing_images": missing_images,
+        "image_ocr_checked": total_ocr,
+        "image_ocr_skipped": skipped_ocr,
+        "ocr_text_by_key": ocr_text_by_key,
+        "skipped_ocr_keys": list(skipped_ocr_keys),
+    }
 
 
 def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROMPT_TEMPLATES_DIR) -> list[Task]:
@@ -2116,12 +2277,13 @@ def write_image_only_tree(output_root: Path, tasks: list[dict]) -> Path:
     return image_root
 
 
-def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bool) -> None:
+def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bool, ocr_workers: int | None = None) -> None:
     tasks = read_tasks(output_root)
     for task in tasks:
         validate_manifest_task(task)
-    validation = validate_task_files(output_root, tasks)
+    validation = validate_task_files(output_root, tasks, ocr_workers=ocr_workers)
     image_only_root = write_image_only_tree(output_root, tasks)
+    emit_progress(42, "Driveフォルダを確認中")
     sheet_regions = load_sheet_region_index()
     folder_ids: dict[str, str] = {
         folder["name"]: folder["id"]
@@ -2137,9 +2299,12 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
     manifest: dict = {"items": {}}
     uploaded = 0
     deleted_images = 0
+    skipped_ocr_keys = set(validation.get("skipped_ocr_keys") or [])
+    ocr_text_by_key = validation.get("ocr_text_by_key") if isinstance(validation.get("ocr_text_by_key"), dict) else {}
 
-    for task in tasks:
+    for index, task in enumerate(tasks, start=1):
         account_name = task["account_name"]
+        emit_progress(45 + int((index - 1) / max(len(tasks), 1) * 48), f"Drive反映: {index}/{len(tasks)} {account_name} / {task.get('label_ja', '')}")
         if account_name not in folder_ids:
             folder_ids[account_name] = create_drive_folder(account_name, PARENT_FOLDER_ID)
         folder_id = folder_ids[account_name]
@@ -2178,8 +2343,16 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
                 f"画像ファイル名が期待値と一致しません: {account_name} / {task['kind']} -> {image_path.name}"
             )
         if image_exists:
-            validate_image_kind(image_path, task["kind"], account_name)
-            source_text = source_text_prefers_image(task["kind"], image_path, task["post_text"])
+            task_key = drive_manifest_key(task)
+            if task_key in skipped_ocr_keys:
+                source_text = task["post_text"]
+            else:
+                source_text = source_text_prefers_image(
+                    task["kind"],
+                    image_path,
+                    task["post_text"],
+                    image_ocr_text=str(ocr_text_by_key.get(task_key) or ""),
+                )
         else:
             source_text = task["post_text"]
 
@@ -2232,6 +2405,7 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
         manifest["items"][drive_manifest_key(task)] = manifest_item
 
     write_drive_sync_manifest(output_root, manifest)
+    emit_progress(98, "Drive反映結果を保存中")
 
     print(json.dumps({"output_root": str(output_root), "uploaded": uploaded, "updated_cells": 0, "manifest": str(output_root / DRIVE_SYNC_MANIFEST_FILENAME)}, ensure_ascii=False))
 
@@ -2336,9 +2510,9 @@ def sync_sheet(output_root: Path) -> None:
     )
 
 
-def validate_output(output_root: Path) -> None:
+def validate_output(output_root: Path, ocr_workers: int | None = None) -> None:
     tasks = read_tasks(output_root)
-    validation = validate_task_files(output_root, tasks)
+    validation = validate_task_files(output_root, tasks, ocr_workers=ocr_workers)
     image_only_root = write_image_only_tree(output_root, tasks)
     print(
         json.dumps(
@@ -2346,6 +2520,8 @@ def validate_output(output_root: Path) -> None:
                 "output_root": str(output_root),
                 "checked": validation["checked"],
                 "missing_images": validation["missing_images"],
+                "image_ocr_checked": validation.get("image_ocr_checked", 0),
+                "image_ocr_skipped": validation.get("image_ocr_skipped", 0),
                 "image_only_root": str(image_only_root),
             },
             ensure_ascii=False,
@@ -2357,6 +2533,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="JMTY weekly prompt/image bundle helper")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--prompt-templates-dir", default=str(DEFAULT_PROMPT_TEMPLATES_DIR))
+    parser.add_argument(
+        "--ocr-workers",
+        type=int,
+        default=int(os.environ.get("JMTY_OCR_WORKERS", "0") or "0"),
+        help="画像OCR検証の並列数。0なら自動で決定する",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("prepare")
@@ -2408,11 +2590,16 @@ def main() -> int:
         elif args.command == "rotate-sheet":
             rotate_sheet(output_root, dry_run=args.dry_run)
         elif args.command == "sync-drive":
-            sync_drive(output_root, purge_existing=args.purge_existing, purge_account_images=args.purge_account_images)
+            sync_drive(
+                output_root,
+                purge_existing=args.purge_existing,
+                purge_account_images=args.purge_account_images,
+                ocr_workers=args.ocr_workers,
+            )
         elif args.command == "sync-sheet":
             sync_sheet(output_root)
         elif args.command == "validate-output":
-            validate_output(output_root)
+            validate_output(output_root, ocr_workers=args.ocr_workers)
         elif args.command == "validate-sheet-posts":
             validate_sheet_posts(
                 output_root,
