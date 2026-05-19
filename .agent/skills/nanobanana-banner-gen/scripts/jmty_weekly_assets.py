@@ -361,6 +361,25 @@ def read_sheet_rows() -> list[list[str]]:
     return res.get("values", [])
 
 
+def current_sheet_account_rows(rows: list[list[str]]) -> dict[str, dict]:
+    index: dict[str, dict] = {}
+    duplicates: set[str] = set()
+    for row_idx, row in enumerate(rows, start=7):
+        account_name = sanitize_name(str(row[1]).strip() if len(row) > 1 else "")
+        if not account_name:
+            continue
+        if account_name in index:
+            duplicates.add(account_name)
+            continue
+        index[account_name] = {"row_idx": row_idx, "row": row}
+    if duplicates:
+        raise RuntimeError(
+            "スプレッドシート上でアカウント名が重複しているため反映先を確定できません: "
+            + " / ".join(sorted(duplicates))
+        )
+    return index
+
+
 def list_drive_child_folders(parent_id: str) -> list[dict]:
     res = run_gws(
         [
@@ -486,6 +505,36 @@ def find_drive_file_by_name(parent_id: str, name: str) -> dict | None:
     )
     files = res.get("files", [])
     return files[0] if files else None
+
+
+def list_drive_child_files(parent_id: str) -> list[dict]:
+    res = run_gws(
+        [
+            "drive",
+            "files",
+            "list",
+            "--params",
+            json.dumps(
+                {
+                    "q": f"'{parent_id}' in parents and trashed = false",
+                    "fields": "files(id,name,mimeType,modifiedTime)",
+                    "pageSize": 1000,
+                    "orderBy": "modifiedTime desc",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    return [file for file in res.get("files", []) if isinstance(file, dict)]
+
+
+def drive_files_by_name(files: list[dict]) -> dict[str, dict]:
+    by_name: dict[str, dict] = {}
+    for file in files:
+        name = str(file.get("name") or "")
+        if name and name not in by_name:
+            by_name[name] = file
+    return by_name
 
 
 def drive_manifest_key(task: dict) -> str:
@@ -615,18 +664,24 @@ def delete_drive_image_files(parent_id: str) -> int:
     return deleted
 
 
-def replace_drive_file(file_path: Path, parent_id: str) -> str:
-    existing = find_drive_file_by_name(parent_id, file_path.name)
+def replace_drive_file(file_path: Path, parent_id: str, existing_files: dict[str, dict] | None = None) -> str:
+    existing = existing_files.get(file_path.name) if existing_files is not None else find_drive_file_by_name(parent_id, file_path.name)
     if existing and existing.get("id"):
         try:
-            return update_drive_file(file_path, str(existing["id"]))
+            file_id = update_drive_file(file_path, str(existing["id"]))
+            if existing_files is not None:
+                existing_files[file_path.name] = {"id": file_id, "name": file_path.name}
+            return file_id
         except JmtyWeeklyAssetsError as exc:
             print(
                 f"⚠️ Drive既存ファイルを更新できないため、新規アップロードに切り替えます: "
                 f"{file_path.name} / {compact_gws_error(exc)}",
                 flush=True,
             )
-    return upload_drive_file(file_path, parent_id)
+    file_id = upload_drive_file(file_path, parent_id)
+    if existing_files is not None:
+        existing_files[file_path.name] = {"id": file_id, "name": file_path.name}
+    return file_id
 
 
 def make_public(file_id: str) -> None:
@@ -1597,44 +1652,7 @@ def render_prompt_document(task: dict | Task, image_path: Path, post_text: str, 
 
 
 def sheet_post_text(task_kind: str, post_text: str) -> str:
-    lines = [line.rstrip() for line in strip_markdown_markers(post_text).splitlines()]
-    if "## 本文" in lines:
-        start = lines.index("## 本文") + 1
-        lines = lines[start:]
-    elif "本文" in lines:
-        start = lines.index("本文") + 1
-        lines = lines[start:]
-
-    body_lines: list[str] = []
-    section_headings = {
-        "仕事内容詳細",
-        "具体的な業務",
-        "サポート体制",
-        "募集概要",
-        "住まいについて",
-        "FAQ",
-        "応募導線",
-        "在宅でも安心して続けやすい理由",
-        "研修・立ち上がりステップ",
-        "報酬イメージ（目安）",
-        "応募条件（詳細）",
-        "こんな方に特に向いています",
-        "選考〜開始までの流れ",
-        "最後に",
-    }
-    for line in lines:
-        if line.startswith("## "):
-            break
-        if line.startswith("# "):
-            continue
-        if body_lines and line.strip() in section_headings:
-            break
-        if line.strip() == "":
-            continue
-        body_lines.append(line)
-
-    body = "\n".join(body_lines).strip()
-    return body or strip_markdown_markers(post_text)
+    return strip_markdown_markers(post_text)
 
 
 def choose_post_variation(account_no: str, row_idx: int, task_type: str) -> tuple[str, str]:
@@ -2296,6 +2314,7 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
 
     uploaded_account_docs: set[str] = set()
     purged_account_images: set[str] = set()
+    existing_files_by_folder: dict[str, dict[str, dict]] = {}
     manifest: dict = {"items": {}}
     uploaded = 0
     deleted_images = 0
@@ -2311,6 +2330,11 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
         if purge_account_images and account_name not in purged_account_images:
             deleted_images += delete_drive_image_files(folder_id)
             purged_account_images.add(account_name)
+            existing_files_by_folder.pop(folder_id, None)
+        existing_files = existing_files_by_folder.get(folder_id)
+        if existing_files is None:
+            existing_files = drive_files_by_name(list_drive_child_files(folder_id))
+            existing_files_by_folder[folder_id] = existing_files
 
         account_dir = output_root / task["folder_name"]
         image_path = account_dir / Path(task["image_relpath"]).name
@@ -2375,11 +2399,11 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
             prompt_path.write_text(render_prompt_document(task, image_path, task["post_text"], task["prompt_text"]), encoding="utf-8")
 
         if account_name not in uploaded_account_docs and summary_path.exists():
-            replace_drive_file(summary_path, folder_id)
+            replace_drive_file(summary_path, folder_id, existing_files)
             uploaded_account_docs.add(account_name)
-        replace_drive_file(post_path, folder_id)
+        replace_drive_file(post_path, folder_id, existing_files)
         if prompt_path.exists():
-            replace_drive_file(prompt_path, folder_id)
+            replace_drive_file(prompt_path, folder_id, existing_files)
 
         manifest_item = {
             "account_name": account_name,
@@ -2396,7 +2420,7 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
             "post_path": str(post_path),
         }
         if image_exists:
-            file_id = replace_drive_file(image_path, folder_id)
+            file_id = replace_drive_file(image_path, folder_id, existing_files)
             make_public(file_id)
             uploaded += 1
             manifest_item["image_file_id"] = file_id
@@ -2449,6 +2473,8 @@ def sync_sheet(output_root: Path) -> None:
     tasks = read_tasks(output_root)
     for task in tasks:
         validate_manifest_task(task)
+    sheet_rows = read_sheet_rows()
+    sheet_accounts = current_sheet_account_rows(sheet_rows)
 
     manifest = load_drive_sync_manifest(output_root)
     folder_ids: dict[str, str] = {
@@ -2457,10 +2483,36 @@ def sync_sheet(output_root: Path) -> None:
     }
     updates: list[dict] = []
     warnings: list[str] = []
+    row_moves: list[dict] = []
     updated_posts = 0
     updated_images = 0
 
     for task in tasks:
+        account_name = sanitize_name(str(task.get("account_name") or task.get("folder_name") or ""))
+        current_sheet_row = sheet_accounts.get(account_name)
+        if not current_sheet_row:
+            raise RuntimeError(
+                f"スプレッドシートにアカウント行がないため反映を中止しました: {account_name}。"
+                "GUIでシート読込を実行し、削除済みアカウントのローカルフォルダを整理してください。"
+            )
+        current_row_idx = int(current_sheet_row["row_idx"])
+        old_row_idx = int(task.get("row_idx") or 0)
+        if old_row_idx and old_row_idx != current_row_idx:
+            row_moves.append(
+                {
+                    "account_name": account_name,
+                    "kind": task.get("kind", ""),
+                    "label": task.get("label_ja", ""),
+                    "old_row_idx": old_row_idx,
+                    "new_row_idx": current_row_idx,
+                }
+            )
+            print(
+                f"↪ 行移動を検出: {account_name} / {task.get('label_ja', '')} "
+                f"{old_row_idx}行 -> {current_row_idx}行",
+                flush=True,
+            )
+        task["row_idx"] = current_row_idx
         account_dir = output_root / task["folder_name"]
         post_path = account_dir / Path(task["post_relpath"]).name
         if not post_path.exists():
@@ -2504,6 +2556,7 @@ def sync_sheet(output_root: Path) -> None:
                 "updated_images": updated_images,
                 "skipped_images": len(warnings),
                 "warnings": warnings,
+                "row_moves": row_moves,
             },
             ensure_ascii=False,
         )

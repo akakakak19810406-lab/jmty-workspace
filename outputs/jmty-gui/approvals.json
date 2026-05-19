@@ -24,11 +24,6 @@
     "saved_at": "2026-05-18 06:08:42",
     "image_path": "outputs/jmty-weekly/current/カツアキ/工場.jpg"
   },
-  "尾上治::factory": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:09:59",
-    "image_path": "outputs/jmty-weekly/current/尾上治/工場.jpg"
-  },
   "坪井 清栄 （あいはら）::factory": {
     "approved": false,
     "saved_at": "2026-05-18 06:10:29",
@@ -43,16 +38,6 @@
     "approved": false,
     "saved_at": "2026-05-18 06:12:02",
     "image_path": "outputs/jmty-weekly/current/加藤直樹/在宅2.jpg"
-  },
-  "尾上治::remote1": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:12:56",
-    "image_path": "outputs/jmty-weekly/current/尾上治/在宅1.jpg"
-  },
-  "近藤::remote1": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:15:25",
-    "image_path": "outputs/jmty-weekly/current/近藤/在宅1.jpg"
   },
   "坪井 清栄 （あいはら）::remote2": {
     "approved": false,
@@ -78,11 +63,6 @@
     "approved": false,
     "saved_at": "2026-05-18 06:17:15",
     "image_path": "outputs/jmty-weekly/current/新城安司/在宅1.jpg"
-  },
-  "近藤::remote2": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:17:36",
-    "image_path": "outputs/jmty-weekly/current/近藤/在宅2.jpg"
   },
   "株式会社Keystone::remote2": {
     "approved": false,
@@ -114,11 +94,6 @@
     "saved_at": "2026-05-18 06:21:11",
     "image_path": "outputs/jmty-weekly/current/上野/在宅2.jpg"
   },
-  "あきふぉん （秋田しげとし）::factory": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:23:01",
-    "image_path": "outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/工場.jpg"
-  },
   "Akko（山田明子）::remote2": {
     "approved": false,
     "saved_at": "2026-05-18 06:29:11",
@@ -129,30 +104,10 @@
     "saved_at": "2026-05-18 06:27:34",
     "image_path": "outputs/jmty-weekly/current/株式会社Keystone/工場.jpg"
   },
-  "尾上治::remote2": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:27:43",
-    "image_path": "outputs/jmty-weekly/current/尾上治/在宅2.jpg"
-  },
-  "あきふぉん （秋田しげとし）::remote1": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:27:43",
-    "image_path": "outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/在宅1.jpg"
-  },
   "Sho::remote1": {
     "approved": false,
     "saved_at": "2026-05-18 06:27:53",
     "image_path": "outputs/jmty-weekly/current/Sho/在宅1.jpg"
-  },
-  "近藤::factory": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:29:41",
-    "image_path": "outputs/jmty-weekly/current/近藤/工場.jpg"
-  },
-  "あきふぉん （秋田しげとし）::remote2": {
-    "approved": false,
-    "saved_at": "2026-05-18 06:31:12",
-    "image_path": "outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/在宅2.jpg"
   },
   "Sho::remote2": {
     "approved": false,
