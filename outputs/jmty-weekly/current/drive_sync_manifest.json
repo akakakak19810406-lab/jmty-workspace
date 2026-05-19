@@ -10,9 +10,9 @@
       "folder_id": "12gAn5TmmV-dx3DaAwYpV0eyi08CZvAjm",
       "folder_name": "Sho",
       "image_name": "工場.jpg",
-      "image_file_id": "15uWUpVohMcAJ_EpPhOpFcs_CV6tHwS32",
+      "image_file_id": "1hMHaE17A2hTdBQ13upOPypWYvj0fQg0g",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/Sho/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/Sho/工場の投稿文章.md"
     },
     "Sho::remote1": {
       "account_name": "Sho",
@@ -24,9 +24,9 @@
       "folder_id": "12gAn5TmmV-dx3DaAwYpV0eyi08CZvAjm",
       "folder_name": "Sho",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1hKaF1mRnq4im109VYAcXhai4aeG37OHf",
+      "image_file_id": "1GKwl_QaDYCkPGHzFFqR8nqw-e2TTMVQz",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/Sho/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/Sho/在宅1の投稿文章.md"
     },
     "Sho::remote2": {
       "account_name": "Sho",
@@ -38,9 +38,9 @@
       "folder_id": "12gAn5TmmV-dx3DaAwYpV0eyi08CZvAjm",
       "folder_name": "Sho",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1cjfdo0JngoFgDwuS6WnCZplS_spmt2i4",
+      "image_file_id": "178Ed14nWvlduFsJ6RfEq7gcIZrsOXp5e",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/Sho/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/Sho/在宅2の投稿文章.md"
     },
     "Akko（山田明子）::factory": {
       "account_name": "Akko（山田明子）",
@@ -52,9 +52,9 @@
       "folder_id": "1nGz_I349Hz9DV3wci7t0005Go7CbV4fi",
       "folder_name": "Akko（山田明子）",
       "image_name": "工場.jpg",
-      "image_file_id": "1mMr1vwEN7qmK-Oehx8hvTHWGPx2f_S-C",
+      "image_file_id": "1VZeFFEpg1iYKn-R-bB8xvrz48S0W0Xc2",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/Akko（山田明子）/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/Akko（山田明子）/工場の投稿文章.md"
     },
     "Akko（山田明子）::remote1": {
       "account_name": "Akko（山田明子）",
@@ -66,9 +66,9 @@
       "folder_id": "1nGz_I349Hz9DV3wci7t0005Go7CbV4fi",
       "folder_name": "Akko（山田明子）",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1vAKd3bTlqgYdm-8XWs5ZjMfKN8S4GRJN",
+      "image_file_id": "1dlTp4-_lVaogQHqOB79pft5F9pE1u9Jj",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/Akko（山田明子）/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/Akko（山田明子）/在宅1の投稿文章.md"
     },
     "Akko（山田明子）::remote2": {
       "account_name": "Akko（山田明子）",
@@ -80,51 +80,9 @@
       "folder_id": "1nGz_I349Hz9DV3wci7t0005Go7CbV4fi",
       "folder_name": "Akko（山田明子）",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1x5aB_6sTRpwwlksUUm75Epouh5hHJgrr",
+      "image_file_id": "1T4ViVIFv90Q8V_EMBYHG49e9JWp4si3R",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/Akko（山田明子）/在宅2の投稿文章.md"
-    },
-    "あきふぉん （秋田しげとし）::factory": {
-      "account_name": "あきふぉん （秋田しげとし）",
-      "kind": "factory",
-      "label_ja": "工場",
-      "row_idx": 9,
-      "image_col": "I",
-      "post_col": "J",
-      "folder_id": "1ARjJQquj9GG6xpEatOmoq-SFsmU_Ni3F",
-      "folder_name": "あきふぉん （秋田しげとし）",
-      "image_name": "工場.jpg",
-      "image_file_id": "1zbRhnDdb5A5yUb37DD3oUtz32etuOnEg",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/工場の投稿文章.md"
-    },
-    "あきふぉん （秋田しげとし）::remote1": {
-      "account_name": "あきふぉん （秋田しげとし）",
-      "kind": "remote1",
-      "label_ja": "在宅1",
-      "row_idx": 9,
-      "image_col": "R",
-      "post_col": "S",
-      "folder_id": "1ARjJQquj9GG6xpEatOmoq-SFsmU_Ni3F",
-      "folder_name": "あきふぉん （秋田しげとし）",
-      "image_name": "在宅1.jpg",
-      "image_file_id": "1W9KhLXxbgms3qTIRkDT82pmrGA4-lLbE",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/在宅1の投稿文章.md"
-    },
-    "あきふぉん （秋田しげとし）::remote2": {
-      "account_name": "あきふぉん （秋田しげとし）",
-      "kind": "remote2",
-      "label_ja": "在宅2",
-      "row_idx": 9,
-      "image_col": "T",
-      "post_col": "U",
-      "folder_id": "1ARjJQquj9GG6xpEatOmoq-SFsmU_Ni3F",
-      "folder_name": "あきふぉん （秋田しげとし）",
-      "image_name": "在宅2.jpg",
-      "image_file_id": "1ByPhCQRC3sTJ3Iso1XmcujpYRZjIgtBT",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/あきふぉん （秋田しげとし）/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/Akko（山田明子）/在宅2の投稿文章.md"
     },
     "新城安司::factory": {
       "account_name": "新城安司",
@@ -136,9 +94,9 @@
       "folder_id": "1XkyP5ISY9tlXhfnHY7sDQZquTj7EtmDb",
       "folder_name": "新城安司",
       "image_name": "工場.jpg",
-      "image_file_id": "1hIydkKGu2MD1i7rhykdic1Fxbz5yxiWM",
+      "image_file_id": "1CtIP0ipspmgVMBU594uElcuxgfL1csvo",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/新城安司/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/新城安司/工場の投稿文章.md"
     },
     "新城安司::remote1": {
       "account_name": "新城安司",
@@ -150,9 +108,9 @@
       "folder_id": "1XkyP5ISY9tlXhfnHY7sDQZquTj7EtmDb",
       "folder_name": "新城安司",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1HOtXzwKN81VHD8HuSShSj-a3_MAsTAoR",
+      "image_file_id": "1eG9ASLHAWJj1vXMtHgXtSFiznK9jxiHx",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/新城安司/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/新城安司/在宅1の投稿文章.md"
     },
     "新城安司::remote2": {
       "account_name": "新城安司",
@@ -164,9 +122,9 @@
       "folder_id": "1XkyP5ISY9tlXhfnHY7sDQZquTj7EtmDb",
       "folder_name": "新城安司",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1L8X7bd5dFWtQ3H9s69O8bpzNR6-oPkgF",
+      "image_file_id": "1MQdfakjddXtzYPhbEFGt_ZVoI4Yt0ODj",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/新城安司/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/新城安司/在宅2の投稿文章.md"
     },
     "斎藤孝次::factory": {
       "account_name": "斎藤孝次",
@@ -178,9 +136,9 @@
       "folder_id": "15VOe7Pl_3D8rwzDnqJgsavLBuWeKsm_f",
       "folder_name": "斎藤孝次",
       "image_name": "工場.jpg",
-      "image_file_id": "1qwnY2IPCEKmhYwWkrssoKJdyhNfDC5JQ",
+      "image_file_id": "1uXgq5lAfvn3TB1Veiqh06AcfHqO4Q5ii",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/斎藤孝次/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/斎藤孝次/工場の投稿文章.md"
     },
     "斎藤孝次::remote1": {
       "account_name": "斎藤孝次",
@@ -192,9 +150,9 @@
       "folder_id": "15VOe7Pl_3D8rwzDnqJgsavLBuWeKsm_f",
       "folder_name": "斎藤孝次",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1OcNqINV2EBqUK5rL2yelU90jO-hdISAV",
+      "image_file_id": "1rzolDBSD4q1O1e-hQ78m7esF08sjt8m0",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/斎藤孝次/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/斎藤孝次/在宅1の投稿文章.md"
     },
     "斎藤孝次::remote2": {
       "account_name": "斎藤孝次",
@@ -206,9 +164,9 @@
       "folder_id": "15VOe7Pl_3D8rwzDnqJgsavLBuWeKsm_f",
       "folder_name": "斎藤孝次",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1jnx0XkPhS0aodrTNU1hPmc94Eg7NpkYg",
+      "image_file_id": "1fgwZEZJLxKl2xG0ce86W4ZDujNfT8f0P",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/斎藤孝次/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/斎藤孝次/在宅2の投稿文章.md"
     },
     "加藤直樹::factory": {
       "account_name": "加藤直樹",
@@ -220,9 +178,9 @@
       "folder_id": "1jaumLQvi5wqIZC-E3N5-9FMKJOLli6Da",
       "folder_name": "加藤直樹",
       "image_name": "工場.jpg",
-      "image_file_id": "1riI5A9Za1CUNR8TNOKo85QNhTp0X5msQ",
+      "image_file_id": "1IsHPJN58q7nrRcrn4cnB5LxEnQx9UEfQ",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/加藤直樹/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/加藤直樹/工場の投稿文章.md"
     },
     "加藤直樹::remote1": {
       "account_name": "加藤直樹",
@@ -234,9 +192,9 @@
       "folder_id": "1jaumLQvi5wqIZC-E3N5-9FMKJOLli6Da",
       "folder_name": "加藤直樹",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1Fzny9wthhmbVtzEOC2_v-BI9Zd6If4Rs",
+      "image_file_id": "1qCKzQXbz0JoVYVnzTNs-dAuWaC0cKomV",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/加藤直樹/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/加藤直樹/在宅1の投稿文章.md"
     },
     "加藤直樹::remote2": {
       "account_name": "加藤直樹",
@@ -248,9 +206,9 @@
       "folder_id": "1jaumLQvi5wqIZC-E3N5-9FMKJOLli6Da",
       "folder_name": "加藤直樹",
       "image_name": "在宅2.jpg",
-      "image_file_id": "14sg6sKY9R-jf9HJS_Ww0c_gv-bnC0cUH",
+      "image_file_id": "12xAHkZtGiNuESdpy6yKXbUgz4EK-NmoW",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/加藤直樹/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/加藤直樹/在宅2の投稿文章.md"
     },
     "坪井 清栄 （あいはら）::factory": {
       "account_name": "坪井 清栄 （あいはら）",
@@ -262,9 +220,9 @@
       "folder_id": "1vhDRP9rx8q-rhFOBKlBOynYDZB3ScgHX",
       "folder_name": "坪井 清栄 （あいはら）",
       "image_name": "工場.jpg",
-      "image_file_id": "1wBJqVGbT5pSwtzU2Jh9CIT5hAfh3O-nA",
+      "image_file_id": "1Cg8omsGRuad1aERKALxAvxvuZtkhlwus",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/坪井 清栄 （あいはら）/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/坪井 清栄 （あいはら）/工場の投稿文章.md"
     },
     "坪井 清栄 （あいはら）::remote1": {
       "account_name": "坪井 清栄 （あいはら）",
@@ -276,9 +234,9 @@
       "folder_id": "1vhDRP9rx8q-rhFOBKlBOynYDZB3ScgHX",
       "folder_name": "坪井 清栄 （あいはら）",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1MvmGVN-mmMnwh-z4NXb9Z0ndjUyuoBhV",
+      "image_file_id": "1Z_BtkaiZ175AwJEF4gku2eFCiv3Kls2c",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅1の投稿文章.md"
     },
     "坪井 清栄 （あいはら）::remote2": {
       "account_name": "坪井 清栄 （あいはら）",
@@ -290,51 +248,9 @@
       "folder_id": "1vhDRP9rx8q-rhFOBKlBOynYDZB3ScgHX",
       "folder_name": "坪井 清栄 （あいはら）",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1WT6HB9j-mqtDq_iZi1OEClcWR5x9XPx-",
+      "image_file_id": "163dMObVd3Q8n9Lp8Z23pP5NB0BndwcX3",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅2の投稿文章.md"
-    },
-    "尾上治::factory": {
-      "account_name": "尾上治",
-      "kind": "factory",
-      "label_ja": "工場",
-      "row_idx": 14,
-      "image_col": "I",
-      "post_col": "J",
-      "folder_id": "1q_UA3BHk1UnZ_c3bMnqXIHcUOlDnON5w",
-      "folder_name": "尾上治",
-      "image_name": "工場.jpg",
-      "image_file_id": "1Oa4BzTZS2ilLgEqECrwSYHC_yOvsAXd_",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/尾上治/工場の投稿文章.md"
-    },
-    "尾上治::remote1": {
-      "account_name": "尾上治",
-      "kind": "remote1",
-      "label_ja": "在宅1",
-      "row_idx": 14,
-      "image_col": "R",
-      "post_col": "S",
-      "folder_id": "1q_UA3BHk1UnZ_c3bMnqXIHcUOlDnON5w",
-      "folder_name": "尾上治",
-      "image_name": "在宅1.jpg",
-      "image_file_id": "1ozK69mp7TC0pCb3hcNA43A0p17up3-CQ",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/尾上治/在宅1の投稿文章.md"
-    },
-    "尾上治::remote2": {
-      "account_name": "尾上治",
-      "kind": "remote2",
-      "label_ja": "在宅2",
-      "row_idx": 14,
-      "image_col": "T",
-      "post_col": "U",
-      "folder_id": "1q_UA3BHk1UnZ_c3bMnqXIHcUOlDnON5w",
-      "folder_name": "尾上治",
-      "image_name": "在宅2.jpg",
-      "image_file_id": "1J-OtEJov5usdquHpBl5nLcFyv5Oom-t_",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/尾上治/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅2の投稿文章.md"
     },
     "カツアキ::factory": {
       "account_name": "カツアキ",
@@ -346,9 +262,9 @@
       "folder_id": "1YE4Tg3esyJ-pWJm4fALQ392LyHS4Rz-r",
       "folder_name": "カツアキ",
       "image_name": "工場.jpg",
-      "image_file_id": "1BEQYmPSfggC3Did_G38kXIfTpc_viipq",
+      "image_file_id": "1XJu4WsdKXpcuJkErAd2aAV4LOpGKAPu6",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/カツアキ/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/カツアキ/工場の投稿文章.md"
     },
     "カツアキ::remote1": {
       "account_name": "カツアキ",
@@ -360,9 +276,9 @@
       "folder_id": "1YE4Tg3esyJ-pWJm4fALQ392LyHS4Rz-r",
       "folder_name": "カツアキ",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1njHmRqqgLAZl040-lXcYo_HkL7ZIn2y3",
+      "image_file_id": "1f-mecKQxyfSOAPMTJ2gapjW9gQSL5ZEu",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/カツアキ/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/カツアキ/在宅1の投稿文章.md"
     },
     "カツアキ::remote2": {
       "account_name": "カツアキ",
@@ -374,9 +290,9 @@
       "folder_id": "1YE4Tg3esyJ-pWJm4fALQ392LyHS4Rz-r",
       "folder_name": "カツアキ",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1oTDVt5nYUuD7fIsJ_7bh3pSslr3JMDZb",
+      "image_file_id": "1JWClLkqPPw9MIcAccHVgLwWZ9cJfZgdS",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/カツアキ/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/カツアキ/在宅2の投稿文章.md"
     },
     "株式会社Keystone::factory": {
       "account_name": "株式会社Keystone",
@@ -388,9 +304,9 @@
       "folder_id": "150wwKaW1CuGem5uXxikObGUZ_xHUMsZK",
       "folder_name": "株式会社Keystone",
       "image_name": "工場.jpg",
-      "image_file_id": "1X6-P1foC8GRENtFmvDwdVYIUMh0DOrPT",
+      "image_file_id": "1015Tx28a7Za20hi3h4dIulCQrSn4O2Ml",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/株式会社Keystone/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/株式会社Keystone/工場の投稿文章.md"
     },
     "株式会社Keystone::remote1": {
       "account_name": "株式会社Keystone",
@@ -402,9 +318,9 @@
       "folder_id": "150wwKaW1CuGem5uXxikObGUZ_xHUMsZK",
       "folder_name": "株式会社Keystone",
       "image_name": "在宅1.jpg",
-      "image_file_id": "12zWXfagPKqEwARqLDdV0AbChmNumt6ha",
+      "image_file_id": "1GrkPh-83ydOa0dJ3qz-pxFVTGGxw8452",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/株式会社Keystone/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/株式会社Keystone/在宅1の投稿文章.md"
     },
     "株式会社Keystone::remote2": {
       "account_name": "株式会社Keystone",
@@ -416,51 +332,9 @@
       "folder_id": "150wwKaW1CuGem5uXxikObGUZ_xHUMsZK",
       "folder_name": "株式会社Keystone",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1XbaNx5q1uMpqXg_3vmNC94v1fBSUdIrT",
+      "image_file_id": "15VFeyM8yo2cceKOOh38ymYoXSCrX2Jxq",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/株式会社Keystone/在宅2の投稿文章.md"
-    },
-    "近藤::factory": {
-      "account_name": "近藤",
-      "kind": "factory",
-      "label_ja": "工場",
-      "row_idx": 17,
-      "image_col": "I",
-      "post_col": "J",
-      "folder_id": "1ndb-LpaGGo7z1rEVA9-eAoO9r05OzmM1",
-      "folder_name": "近藤",
-      "image_name": "工場.jpg",
-      "image_file_id": "1ghw7VjtBCbJbGigHb_aGQgrJKT__nlFN",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/近藤/工場の投稿文章.md"
-    },
-    "近藤::remote1": {
-      "account_name": "近藤",
-      "kind": "remote1",
-      "label_ja": "在宅1",
-      "row_idx": 17,
-      "image_col": "R",
-      "post_col": "S",
-      "folder_id": "1ndb-LpaGGo7z1rEVA9-eAoO9r05OzmM1",
-      "folder_name": "近藤",
-      "image_name": "在宅1.jpg",
-      "image_file_id": "1J0fNNqrjesP8fhWhjEJ6Vxg5LG8dTAGY",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/近藤/在宅1の投稿文章.md"
-    },
-    "近藤::remote2": {
-      "account_name": "近藤",
-      "kind": "remote2",
-      "label_ja": "在宅2",
-      "row_idx": 17,
-      "image_col": "T",
-      "post_col": "U",
-      "folder_id": "1ndb-LpaGGo7z1rEVA9-eAoO9r05OzmM1",
-      "folder_name": "近藤",
-      "image_name": "在宅2.jpg",
-      "image_file_id": "1q_93KexZoXLrXTha7I57ZLCK1MKqJeMl",
-      "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/近藤/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/株式会社Keystone/在宅2の投稿文章.md"
     },
     "上野::factory": {
       "account_name": "上野",
@@ -472,9 +346,9 @@
       "folder_id": "1SQfr4qP_rFhBTUUwAsU0ZZ_V8CDHRLY8",
       "folder_name": "上野",
       "image_name": "工場.jpg",
-      "image_file_id": "1kBZObBALGwNY5cyHYiKK9DREzzfF8J4b",
+      "image_file_id": "1QDg_86hTTX6AEkxjKOv2gC298WdihgAw",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/上野/工場の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/上野/工場の投稿文章.md"
     },
     "上野::remote1": {
       "account_name": "上野",
@@ -486,9 +360,9 @@
       "folder_id": "1SQfr4qP_rFhBTUUwAsU0ZZ_V8CDHRLY8",
       "folder_name": "上野",
       "image_name": "在宅1.jpg",
-      "image_file_id": "1EfltCornoZKfi8OtKzwQYGXiJqgJhHe4",
+      "image_file_id": "1gUtlpjoCfS_KQfhdJ5STng7vI38udfuY",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/上野/在宅1の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/上野/在宅1の投稿文章.md"
     },
     "上野::remote2": {
       "account_name": "上野",
@@ -500,11 +374,11 @@
       "folder_id": "1SQfr4qP_rFhBTUUwAsU0ZZ_V8CDHRLY8",
       "folder_name": "上野",
       "image_name": "在宅2.jpg",
-      "image_file_id": "1I_RO6y1J2cl3J1buEpb0p_hXRth62UiS",
+      "image_file_id": "1BrQcbcvhXOOAN5jlMa7mv7iv2beBSfv8",
       "image_missing": false,
-      "post_path": "/Users/tsukinoayaka/Desktop/jimty/outputs/jmty-weekly/current/上野/在宅2の投稿文章.md"
+      "post_path": "/Users/deguchishouma/Desktop/jmty/jmty-workspace/outputs/jmty-weekly/current/上野/在宅2の投稿文章.md"
     }
   },
-  "updated_at": "2026-05-13T07:57:16",
+  "updated_at": "2026-05-18 09:00:05",
   "parent_folder_id": "16P5sOzyJHLemwURON6Wf1i7NjodK3WWF"
 }

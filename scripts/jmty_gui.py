@@ -376,13 +376,16 @@ git_history_cache_lock = threading.Lock()
 image_validation_file_lock = threading.RLock()
 gws_auth_cache: dict[str, Any] = {"checked_at": 0.0, "state": None}
 gws_auth_cache_lock = threading.Lock()
+gws_auth_refresh_lock = threading.Lock()
 task_board_cache: dict[str, Any] = {"checked_at": 0.0, "state": None}
 task_board_cache_lock = threading.Lock()
 task_board_project_meta_cache: dict[str, Any] = {"checked_at": 0.0, "state": None}
 task_board_project_meta_cache_lock = threading.Lock()
 TASK_BOARD_STATUSES = ["Backlog", "Todo", "In Progress", "Review", "Done"]
-GWS_AUTH_CACHE_SECONDS = 45
+GWS_AUTH_CACHE_SECONDS = 120
+GWS_AUTH_STALE_OK_SECONDS = 900
 GWS_AUTH_TIMEOUT_SECONDS = 2
+GWS_AUTH_PROBE_TIMEOUT_SECONDS = 12
 GWS_AUTH_URL_TIMEOUT_SECONDS = 30
 GWS_AUTH_COMMAND_LABEL = "gws auth login --services drive,sheets"
 LEGACY_GWS_AUTH_COMMAND_LABEL = "gws auth login --full"
@@ -760,17 +763,48 @@ def register_job(job: Job) -> Job:
 def acknowledge_job_log(payload: dict[str, Any]) -> dict[str, Any]:
     job_id = str(payload.get("job_id") or payload.get("id") or "").strip()
     if not job_id:
-        raise ValueError("確認済みにする実行ログIDがありません")
+        raise ValueError("非表示にする実行ログIDがありません")
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
             raise ValueError("対象の実行ログが見つかりません")
-        if job.status != "done":
-            raise ValueError("完了した実行ログだけ確認済みにできます")
+        if job.status == "running":
+            raise ValueError("実行中ログは非表示にできません")
         job.acknowledged_at = display_time()
         result = job_to_dict(job)
     persist_jobs()
     return {"job": result}
+
+
+def acknowledge_visible_job_logs(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_ids = payload.get("job_ids")
+    requested_ids = {
+        str(job_id).strip()
+        for job_id in raw_ids
+        if str(job_id).strip()
+    } if isinstance(raw_ids, list) else set()
+    acknowledged: list[dict[str, Any]] = []
+    skipped_running = 0
+    now = display_time()
+    with jobs_lock:
+        source_jobs = sorted(jobs.values(), key=job_sort_key, reverse=True)
+        for job in source_jobs:
+            if job.acknowledged_at:
+                continue
+            if requested_ids and job.id not in requested_ids:
+                continue
+            if job.status == "running":
+                skipped_running += 1
+                continue
+            job.acknowledged_at = now
+            acknowledged.append(job_to_dict(job))
+        remaining_jobs = jobs_snapshot(include_acknowledged=False)
+    persist_jobs()
+    return {
+        "acknowledged_count": len(acknowledged),
+        "skipped_running_count": skipped_running,
+        "jobs": remaining_jobs,
+    }
 
 
 def load_persisted_jobs() -> None:
@@ -929,87 +963,171 @@ def summarize_gws_auth_status(status: dict[str, Any]) -> dict[str, str | bool]:
     return {"state": "unknown", "label": "認証状態不明", "ok": False, "detail": "gws auth status の結果を判定できません"}
 
 
-def gws_auth_status(force: bool = False) -> dict[str, Any]:
-    with gws_auth_cache_lock:
-        cached = gws_auth_cache.get("state")
-        checked_at = float(gws_auth_cache.get("checked_at") or 0.0)
-        if not force and isinstance(cached, dict) and time.monotonic() - checked_at < GWS_AUTH_CACHE_SECONDS:
-            return cached
-
-    try:
-        executable = resolve_gws_executable()
-    except RuntimeError as exc:
-        state = {
-            "available": False,
-            "state": "missing",
-            "label": "gws未検出",
-            "ok": False,
-            "detail": str(exc),
-            "checked_at": display_time(),
-        }
-    else:
+def probe_gws_api_auth(executable: str) -> dict[str, Any]:
+    probes = [
+        [
+            executable,
+            "drive",
+            "files",
+            "list",
+            "--params",
+            json.dumps({"pageSize": 1, "fields": "files(id,name)"}, ensure_ascii=False),
+        ],
+        [
+            executable,
+            "sheets",
+            "spreadsheets",
+            "values",
+            "get",
+            "--params",
+            json.dumps({"spreadsheetId": SPREADSHEET_ID, "range": f"{SHEET_NAME}!A1:A1"}, ensure_ascii=False),
+        ],
+    ]
+    errors: list[str] = []
+    successes: list[str] = []
+    for command in probes:
         try:
             result = subprocess.run(
-                [executable, "auth", "status"],
+                command,
                 cwd=ROOT,
                 env=gws_env(),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 check=False,
-                timeout=GWS_AUTH_TIMEOUT_SECONDS,
+                timeout=GWS_AUTH_PROBE_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
-            state = {
+            errors.append(f"{command[1]} {command[2]} が {GWS_AUTH_PROBE_TIMEOUT_SECONDS} 秒以内に完了しませんでした")
+            continue
+        if result.returncode != 0:
+            detail = (result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}")[-400:]
+            errors.append(f"{command[1]} {command[2]}: {detail}")
+        else:
+            successes.append(f"{command[1]} {command[2]}")
+    if errors:
+        credentials_path = Path.home() / ".config" / "gws" / "credentials.enc"
+        if successes and credentials_path.exists():
+            return {
                 "available": True,
-                "state": "timeout",
-                "label": "認証確認遅延",
+                "state": "ok_probe_degraded",
+                "label": "gws認証OK",
+                "ok": True,
+                "detail": "一部確認は遅延しましたが、保存済み認証情報とAPI応答を確認しました: "
+                + " / ".join(successes)
+                + " / 遅延: "
+                + " / ".join(errors),
+                "checked_at": display_time(),
+                "keyring_backend": os.environ.get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND") or os.environ.get("JMTY_GWS_KEYRING_BACKEND", "keyring"),
+            }
+        return {
+            "available": True,
+            "state": "timeout",
+            "label": "認証確認遅延",
+            "ok": False,
+            "detail": " / ".join(errors),
+            "checked_at": display_time(),
+        }
+    return {
+        "available": True,
+        "state": "ok_probe",
+        "label": "gws認証OK",
+        "ok": True,
+        "detail": "gws auth status は遅延しましたが、Drive/Sheets API確認は成功しました",
+        "checked_at": display_time(),
+        "keyring_backend": os.environ.get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND") or os.environ.get("JMTY_GWS_KEYRING_BACKEND", "keyring"),
+    }
+
+
+def gws_auth_status(force: bool = False) -> dict[str, Any]:
+    with gws_auth_cache_lock:
+        cached = gws_auth_cache.get("state")
+        checked_at = float(gws_auth_cache.get("checked_at") or 0.0)
+        age = time.monotonic() - checked_at
+        if not force and isinstance(cached, dict):
+            if age < GWS_AUTH_CACHE_SECONDS:
+                return cached
+            if cached.get("ok") and age < GWS_AUTH_STALE_OK_SECONDS:
+                return {**cached, "stale": True}
+
+    with gws_auth_refresh_lock:
+        with gws_auth_cache_lock:
+            cached = gws_auth_cache.get("state")
+            checked_at = float(gws_auth_cache.get("checked_at") or 0.0)
+            age = time.monotonic() - checked_at
+            if not force and isinstance(cached, dict):
+                if age < GWS_AUTH_CACHE_SECONDS:
+                    return cached
+                if cached.get("ok") and age < GWS_AUTH_STALE_OK_SECONDS:
+                    return {**cached, "stale": True}
+
+        try:
+            executable = resolve_gws_executable()
+        except RuntimeError as exc:
+            state = {
+                "available": False,
+                "state": "missing",
+                "label": "gws未検出",
                 "ok": False,
-                "detail": f"gws auth status が {GWS_AUTH_TIMEOUT_SECONDS} 秒以内に完了しませんでした",
+                "detail": str(exc),
                 "checked_at": display_time(),
             }
         else:
-            raw_error = (result.stderr.strip() or result.stdout.strip())[-2000:]
             try:
-                status = parse_gws_json(result.stdout)
-            except json.JSONDecodeError:
-                status = {}
-            if result.returncode != 0:
-                state = {
-                    "available": True,
-                    "state": "error",
-                    "label": "認証エラー",
-                    "ok": False,
-                    "detail": raw_error or f"gws auth status exited with {result.returncode}",
-                    "checked_at": display_time(),
-                    "returncode": result.returncode,
-                }
-            elif not isinstance(status, dict):
-                state = {
-                    "available": True,
-                    "state": "unknown",
-                    "label": "認証状態不明",
-                    "ok": False,
-                    "detail": "gws auth status のJSON形式が想定外です",
-                    "checked_at": display_time(),
-                }
+                result = subprocess.run(
+                    [executable, "auth", "status"],
+                    cwd=ROOT,
+                    env=gws_env(),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    check=False,
+                    timeout=GWS_AUTH_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                state = probe_gws_api_auth(executable)
             else:
-                summary = summarize_gws_auth_status(status)
-                state = {
-                    "available": True,
-                    **summary,
-                    "checked_at": display_time(),
-                    "user": status.get("user") or "",
-                    "keyring_backend": status.get("keyring_backend") or os.environ.get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND") or "file",
-                    "token_valid": status.get("token_valid"),
-                    "has_refresh_token": status.get("has_refresh_token"),
-                    "scope_count": status.get("scope_count"),
-                }
+                raw_error = (result.stderr.strip() or result.stdout.strip())[-2000:]
+                try:
+                    status = parse_gws_json(result.stdout)
+                except json.JSONDecodeError:
+                    status = {}
+                if result.returncode != 0:
+                    state = {
+                        "available": True,
+                        "state": "error",
+                        "label": "認証エラー",
+                        "ok": False,
+                        "detail": raw_error or f"gws auth status exited with {result.returncode}",
+                        "checked_at": display_time(),
+                        "returncode": result.returncode,
+                    }
+                elif not isinstance(status, dict):
+                    state = {
+                        "available": True,
+                        "state": "unknown",
+                        "label": "認証状態不明",
+                        "ok": False,
+                        "detail": "gws auth status のJSON形式が想定外です",
+                        "checked_at": display_time(),
+                    }
+                else:
+                    summary = summarize_gws_auth_status(status)
+                    state = {
+                        "available": True,
+                        **summary,
+                        "checked_at": display_time(),
+                        "user": status.get("user") or "",
+                        "keyring_backend": status.get("keyring_backend") or os.environ.get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND") or "file",
+                        "token_valid": status.get("token_valid"),
+                        "has_refresh_token": status.get("has_refresh_token"),
+                        "scope_count": status.get("scope_count"),
+                    }
 
-    with gws_auth_cache_lock:
-        gws_auth_cache["checked_at"] = time.monotonic()
-        gws_auth_cache["state"] = state
-    return state
+        with gws_auth_cache_lock:
+            gws_auth_cache["checked_at"] = time.monotonic()
+            gws_auth_cache["state"] = state
+        return state
 
 
 def sanitize_name(value: str, fallback: str = "item") -> str:
@@ -1569,44 +1687,7 @@ def normalized_post_text(text: str) -> str:
 
 
 def sheet_post_text(kind: str, post_text: str) -> str:
-    lines = [line.rstrip() for line in strip_markdown_markers(post_text).splitlines()]
-    if "## 本文" in lines:
-        start = lines.index("## 本文") + 1
-        lines = lines[start:]
-    elif "本文" in lines:
-        start = lines.index("本文") + 1
-        lines = lines[start:]
-
-    body_lines: list[str] = []
-    section_headings = {
-        "仕事内容詳細",
-        "具体的な業務",
-        "サポート体制",
-        "募集概要",
-        "住まいについて",
-        "FAQ",
-        "応募導線",
-        "在宅でも安心して続けやすい理由",
-        "研修・立ち上がりステップ",
-        "報酬イメージ（目安）",
-        "応募条件（詳細）",
-        "こんな方に特に向いています",
-        "選考〜開始までの流れ",
-        "最後に",
-    }
-    for line in lines:
-        if line.startswith("## "):
-            break
-        if line.startswith("# "):
-            continue
-        if body_lines and line.strip() in section_headings:
-            break
-        if line.strip() == "":
-            continue
-        body_lines.append(line)
-
-    body = "\n".join(body_lines).strip()
-    return body or strip_markdown_markers(post_text)
+    return strip_markdown_markers(post_text)
 
 
 def post_sync_status(kind: str, local_text: str, sheet_text: str) -> str:
@@ -1633,6 +1714,10 @@ def load_tasks(output_root: Path) -> list[dict[str, Any]]:
     return tasks if isinstance(tasks, list) else []
 
 
+def write_tasks(output_root: Path, tasks: list[dict[str, Any]]) -> None:
+    write_json(output_root / "tasks.json", tasks)
+
+
 def resolve_task_paths(output_root: Path, task: dict[str, Any]) -> dict[str, Path]:
     folder_name = str(task.get("folder_name") or task.get("account_name") or "未設定アカウント")
     account_dir = output_root / folder_name
@@ -1644,6 +1729,190 @@ def resolve_task_paths(output_root: Path, task: dict[str, Any]) -> dict[str, Pat
         "image": output_root / image_relpath,
         "post": output_root / post_relpath,
         "prompt": output_root / prompt_relpath,
+    }
+
+
+ACCOUNT_OUTPUT_MARKERS = {
+    "画像プロンプト一覧.md",
+    "工場.jpg",
+    "在宅1.jpg",
+    "在宅2.jpg",
+    "工場.png",
+    "在宅1.png",
+    "在宅2.png",
+    *POST_FILENAMES.values(),
+    *PROMPT_FILENAMES.values(),
+}
+
+
+def task_account_name(task: dict[str, Any]) -> str:
+    return normalize_account_name(task.get("account_name") or task.get("folder_name") or "")
+
+
+def task_folder_name(task: dict[str, Any]) -> str:
+    return str(task.get("folder_name") or task.get("account_name") or "").strip()
+
+
+def looks_like_account_output_dir(path: Path) -> bool:
+    if not path.is_dir() or path.name.startswith("_"):
+        return False
+    return any((path / marker).exists() for marker in ACCOUNT_OUTPUT_MARKERS)
+
+
+def remove_account_keys_from_mapping(path: Path, removed_accounts: set[str]) -> int:
+    if not removed_accounts or not path.exists():
+        return 0
+    loaded = read_json(path, {})
+    if not isinstance(loaded, dict):
+        return 0
+    kept = {
+        key: value
+        for key, value in loaded.items()
+        if normalize_account_name(str(key).split("::", 1)[0]) not in removed_accounts
+    }
+    removed = len(loaded) - len(kept)
+    if removed:
+        write_json(path, kept)
+    return removed
+
+
+def account_names_from_mapping_file(path: Path) -> set[str]:
+    loaded = read_json(path, {})
+    if not isinstance(loaded, dict):
+        return set()
+    return {
+        normalize_account_name(str(key).split("::", 1)[0])
+        for key in loaded
+        if normalize_account_name(str(key).split("::", 1)[0])
+    }
+
+
+def cleanup_removed_sheet_accounts(output_root: Path, sheet_state: dict[str, Any]) -> dict[str, Any]:
+    sheet_accounts = {
+        normalize_account_name(account.get("account_name"))
+        for account in sheet_state.get("accounts", [])
+        if normalize_account_name(account.get("account_name"))
+    }
+    sheet_accounts_by_name = {
+        normalize_account_name(account.get("account_name")): account
+        for account in sheet_state.get("accounts", [])
+        if normalize_account_name(account.get("account_name"))
+    }
+    if not sheet_accounts:
+        return {
+            "skipped": True,
+            "reason": "シート上のアカウントが0件のためローカル削除をスキップ",
+            "removed_accounts": [],
+            "removed_folders": [],
+            "removed_tasks": 0,
+            "updated_task_rows": [],
+        }
+
+    tasks = load_tasks(output_root)
+    removed_accounts = {
+        task_account_name(task)
+        for task in tasks
+        if task_account_name(task) and task_account_name(task) not in sheet_accounts
+    }
+    output_children = list(output_root.iterdir()) if output_root.exists() else []
+    for child in output_children:
+        folder_account = normalize_account_name(child.name)
+        if looks_like_account_output_dir(child) and folder_account and folder_account not in sheet_accounts:
+            removed_accounts.add(folder_account)
+    manifest_path = output_root / DRIVE_SYNC_MANIFEST_FILENAME
+    manifest = read_json(manifest_path, {})
+    manifest_items = manifest.get("items") if isinstance(manifest, dict) and isinstance(manifest.get("items"), dict) else {}
+    for key in manifest_items:
+        account_name = normalize_account_name(str(key).split("::", 1)[0])
+        if account_name and account_name not in sheet_accounts:
+            removed_accounts.add(account_name)
+    for account_name in account_names_from_mapping_file(APPROVALS_PATH) | account_names_from_mapping_file(IMAGE_VALIDATION_PATH):
+        if account_name not in sheet_accounts:
+            removed_accounts.add(account_name)
+
+    removed_folders: list[str] = []
+    folder_names = {
+        task_folder_name(task)
+        for task in tasks
+        if task_account_name(task) in removed_accounts and task_folder_name(task)
+    }
+    folder_names.update(
+        child.name
+        for child in output_children
+        if looks_like_account_output_dir(child) and normalize_account_name(child.name) in removed_accounts
+    )
+    image_only_root = output_root / "_drive_images"
+    for folder_name in sorted(folder_names):
+        for folder in (output_root / folder_name, image_only_root / folder_name):
+            if not folder.exists() or not folder.is_dir() or not path_in_root(folder, output_root):
+                continue
+            shutil.rmtree(folder)
+            removed_folders.append(rel_to_root(folder) if path_in_root(folder) else str(folder))
+
+    kept_tasks = [task for task in tasks if task_account_name(task) not in removed_accounts]
+    removed_task_count = len(tasks) - len(kept_tasks)
+    updated_task_rows: list[dict[str, Any]] = []
+    for task in kept_tasks:
+        account_name = task_account_name(task)
+        sheet_account = sheet_accounts_by_name.get(account_name)
+        if not sheet_account:
+            continue
+        new_row_idx = int(sheet_account.get("row_number") or 0)
+        old_row_idx = int(task.get("row_idx") or 0)
+        if new_row_idx and old_row_idx != new_row_idx:
+            updated_task_rows.append(
+                {
+                    "account_name": account_name,
+                    "kind": normalize_kind(str(task.get("kind") or "")),
+                    "old_row_idx": old_row_idx,
+                    "new_row_idx": new_row_idx,
+                }
+            )
+            task["row_idx"] = new_row_idx
+        account_no = str(sheet_account.get("account_no") or "")
+        if account_no and str(task.get("account_no") or "") != account_no:
+            task["account_no"] = account_no
+        values = sheet_account.get("values") if isinstance(sheet_account.get("values"), dict) else {}
+        kind = normalize_kind(str(task.get("kind") or ""))
+        if kind == "factory":
+            region = str(values.get("factory_region", {}).get("value", "") or "")
+        elif kind == "remote1":
+            region = str(values.get("remote1_region", {}).get("value", "") or "")
+        elif kind == "remote2":
+            region = str(values.get("remote2_region", {}).get("value", "") or "")
+        else:
+            region = ""
+        if region and str(task.get("region") or "") != region:
+            task["region"] = region
+    if removed_task_count or updated_task_rows:
+        write_tasks(output_root, kept_tasks)
+
+    removed_manifest_items = 0
+    if isinstance(manifest, dict):
+        items = manifest.get("items")
+        if isinstance(items, dict):
+            kept_items = {
+                key: value
+                for key, value in items.items()
+                if normalize_account_name(str(key).split("::", 1)[0]) not in removed_accounts
+            }
+            removed_manifest_items = len(items) - len(kept_items)
+            if removed_manifest_items:
+                manifest["items"] = kept_items
+                manifest["updated_at"] = display_time()
+                write_json(manifest_path, manifest)
+
+    removed_approvals = remove_account_keys_from_mapping(APPROVALS_PATH, removed_accounts)
+    removed_validations = remove_account_keys_from_mapping(IMAGE_VALIDATION_PATH, removed_accounts)
+    return {
+        "skipped": False,
+        "removed_accounts": sorted(removed_accounts),
+        "removed_folders": sorted(removed_folders),
+        "removed_tasks": removed_task_count,
+        "updated_task_rows": updated_task_rows,
+        "removed_drive_manifest_items": removed_manifest_items,
+        "removed_approvals": removed_approvals,
+        "removed_validations": removed_validations,
     }
 
 
@@ -1727,8 +1996,8 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     "slots": {},
                 },
             )
-            account.setdefault("account_no", str(row.get("account_no") or ""))
-            account.setdefault("row_idx", row.get("row_number"))
+            account["account_no"] = str(row.get("account_no") or account.get("account_no") or "")
+            account["row_idx"] = row.get("row_number") or account.get("row_idx")
             values = row.get("values") if isinstance(row.get("values"), dict) else {}
             sheet_slots = {
                 "factory": {
@@ -1758,7 +2027,7 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     slot["post_sync_cell"] = sheet_cell
                     slot["post_sync_column"] = sheet_column or str(slot.get("post_col") or "")
                     slot["post_col"] = str(slot.get("post_col") or sheet_column)
-                    slot["row_idx"] = slot.get("row_idx") or row.get("row_number")
+                    slot["row_idx"] = row.get("row_number") or slot.get("row_idx")
                     slot["region"] = str(slot_values.get("region") or slot.get("region") or "")
                     continue
                 image_path = image_path_for_slot(output_root, account_name, kind)
@@ -2549,9 +2818,11 @@ def build_sheet_state(rows: list[list[str]], mapping: dict[str, Any]) -> dict[st
     }
 
 
-def reload_sheet_state() -> dict[str, Any]:
+def reload_sheet_state(output_root: Path | None = None) -> dict[str, Any]:
     mapping = load_sheet_mapping()
     state = build_sheet_state(read_sheet_rows(mapping), mapping)
+    cleanup_result = cleanup_removed_sheet_accounts(output_root or DEFAULT_OUTPUT_ROOT, state)
+    state["local_cleanup"] = cleanup_result
     write_json(SHEET_CACHE_PATH, state)
     return state
 
@@ -3345,6 +3616,19 @@ def apply_weekly_progress_line(job_id: str, line: str) -> None:
     update_job(job_id, **updates)
 
 
+def apply_weekly_step_progress_line(job_id: str, step_index: int, line: str) -> None:
+    match = WEEKLY_PROGRESS_RE.match(line.strip())
+    if not match:
+        return
+    percent_text, message = match.groups()
+    progress: int | None = None
+    if percent_text:
+        step = weekly_bulk_step(step_index)
+        child_progress = max(0, min(100, int(percent_text)))
+        progress = int(step["start"]) + int((int(step["end"]) - int(step["start"])) * child_progress / 100)
+    update_weekly_bulk_step(job_id, step_index, message.strip() or "実行中", progress)
+
+
 def run_live_job_process(job_id: str, command: str, args: list[str]) -> subprocess.CompletedProcess[str]:
     update_job(job_id, phase="実行中", progress=2)
     process = subprocess.Popen(
@@ -3419,7 +3703,7 @@ def start_job(command: str, output_root: Path, templates_dir: Path, options: dic
         sheet_refresh_output = ""
         if result.returncode == 0 and command in {"rotate-sheet", "sync-sheet", "validate-sheet-posts"}:
             try:
-                reload_sheet_state()
+                reload_sheet_state(output_root)
                 sheet_refresh_output = "\n\n[sheet-cache] 最新スプレッドシートを再読込しました"
             except Exception as exc:
                 sheet_refresh_output = f"\n\n[sheet-cache] 再読込に失敗しました: {exc}"
@@ -3786,7 +4070,7 @@ def validation_failed_post_target(
 def resolve_post_generation_targets(output_root: Path, payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not cached_sheet_state().get("loaded_at"):
         try:
-            reload_sheet_state()
+            reload_sheet_state(output_root)
         except Exception:
             pass
 
@@ -4605,7 +4889,7 @@ def sync_post_to_sheet(output_root: Path, payload: dict[str, Any]) -> dict[str, 
     cell = f"{column}{row_idx}"
     value = sheet_post_text(kind, local_text)
     batch_update_sheet([{"range": f"{SHEET_NAME}!{cell}", "values": [[value]]}])
-    sheet = reload_sheet_state()
+    sheet = reload_sheet_state(output_root)
     return {
         "updated": True,
         "account_name": account_name,
@@ -4654,7 +4938,7 @@ def sync_dirty_posts_to_sheet(output_root: Path, payload: dict[str, Any]) -> dic
             )
     if updates:
         batch_update_sheet(updates)
-        sheet = reload_sheet_state()
+        sheet = reload_sheet_state(output_root)
     else:
         sheet = cached_sheet_state()
     return {"updated": bool(updates), "updated_count": len(updates), "items": items, "sheet": sheet}
@@ -6294,6 +6578,65 @@ def wait_for_child_job(job_id: str, child_id: str, step_index: int, phase_prefix
         time.sleep(2)
 
 
+def run_weekly_bulk_process_live(
+    job_id: str,
+    step_index: int,
+    args: list[str],
+) -> subprocess.CompletedProcess[str]:
+    ensure_not_cancelled(job_id)
+    process = subprocess.Popen(
+        args,
+        cwd=ROOT,
+        env=gws_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        bufsize=1,
+        start_new_session=True,
+    )
+    register_job_process(job_id, process)
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    stream_lock = threading.Lock()
+
+    def stream_reader(pipe: Any, *, stderr: bool) -> None:
+        target = stderr_lines if stderr else stdout_lines
+        try:
+            for line in iter(pipe.readline, ""):
+                with stream_lock:
+                    target.append(line)
+                append_job_output(job_id, line, stderr=stderr)
+                apply_weekly_step_progress_line(job_id, step_index, line)
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    stdout_thread = threading.Thread(target=stream_reader, args=(process.stdout,), kwargs={"stderr": False}, daemon=True)
+    stderr_thread = threading.Thread(target=stream_reader, args=(process.stderr,), kwargs={"stderr": True}, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        while process.poll() is None:
+            ensure_not_cancelled(job_id)
+            time.sleep(0.5)
+        ensure_not_cancelled(job_id)
+        returncode = int(process.returncode or 0)
+        stdout_thread.join(timeout=3)
+        stderr_thread.join(timeout=3)
+        with stream_lock:
+            stdout = "".join(stdout_lines)
+            stderr = "".join(stderr_lines)
+        return subprocess.CompletedProcess(args, returncode, stdout, stderr)
+    except JobCancelledError:
+        terminate_process(process)
+        raise
+    finally:
+        unregister_job_process(job_id, process)
+
+
 def run_weekly_bulk_command_step(
     job_id: str,
     step_index: int,
@@ -6307,16 +6650,15 @@ def run_weekly_bulk_command_step(
     if command == "validate-sheet-posts":
         assert_region_preflight(output_root, {"scope": "all"})
     args = run_weekly_command(command, output_root, templates_dir, options or {})
-    result = run_cancelable_subprocess(job_id, args, env=gws_env())
     append_job_output(
         job_id,
-        f"\n--- {step['label']} / {' '.join(args)} ---\n{result.stdout or ''}\n{result.stderr or ''}\n",
-        stderr=result.returncode != 0,
+        f"\n--- {step['label']} / {' '.join(args)} ---\n",
     )
+    result = run_weekly_bulk_process_live(job_id, step_index, args)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"{command} exited with {result.returncode}")
     if command in {"rotate-sheet", "sync-sheet", "validate-sheet-posts"}:
-        reload_sheet_state()
+        reload_sheet_state(output_root)
 
 
 def collect_weekly_bulk_image_targets(output_root: Path, *, missing_only: bool = False) -> list[dict[str, str]]:
@@ -8193,6 +8535,8 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "job": job.__dict__})
             elif parsed.path == "/api/job/acknowledge":
                 self.send_json({"ok": True, "result": acknowledge_job_log(payload)})
+            elif parsed.path == "/api/job/acknowledge-visible":
+                self.send_json({"ok": True, "result": acknowledge_visible_job_logs(payload)})
             elif parsed.path == "/api/job/cancel":
                 result = request_job_cancel(payload)
                 self.send_json({"ok": True, "job": result.get("job")})
@@ -8261,7 +8605,7 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/image-validation/ack":
                 self.send_json({"ok": True, "result": acknowledge_image_validation(payload)})
             elif parsed.path == "/api/sheet/reload":
-                self.send_json({"ok": True, "sheet": reload_sheet_state()})
+                self.send_json({"ok": True, "sheet": reload_sheet_state(self.output_root)})
             elif parsed.path == "/api/sheet/mapping":
                 self.send_json({"ok": True, "mapping": save_sheet_mapping(payload)})
             elif parsed.path == "/api/image-rules":
@@ -12965,7 +13309,10 @@ INDEX_HTML = r"""<!doctype html>
         <section class="panel">
           <div class="panel-head">
             <h2 class="panel-title">実行ログ</h2>
-            <span class="pill" id="job-state">待機中</span>
+            <div class="panel-actions">
+              <span class="pill" id="job-state">待機中</span>
+              <button id="reset-job-logs" data-icon="playlist_remove">実行ログリセット</button>
+            </div>
           </div>
           <div class="panel-body">
             <div id="jobs" class="job-list"></div>
@@ -16659,7 +17006,18 @@ INDEX_HTML = r"""<!doctype html>
     function renderJobs(jobs) {
       const root = $("jobs");
       const visibleJobs = (jobs || []).filter((job) => !job.acknowledged_at);
+      const resettableJobs = visibleJobs.filter((job) => job.status !== "running");
+      const resetButton = $("reset-job-logs");
       $("job-state").textContent = visibleJobs.some((job) => job.status === "running") ? "実行中" : "待機中";
+      if (resetButton) {
+        resetButton.textContent = "実行ログリセット";
+        resetButton.removeAttribute("data-loading");
+        resetButton.disabled = resettableJobs.length === 0;
+        resetButton.hidden = visibleJobs.length === 0;
+        resetButton.title = resettableJobs.length
+          ? `表示中の実行ログ ${resettableJobs.length}件を非表示にします`
+          : "非表示にできる完了ログはありません";
+      }
       if (!visibleJobs.length) {
         root.innerHTML = `<div class="empty">ログなし</div>`;
         return;
@@ -16669,7 +17027,7 @@ INDEX_HTML = r"""<!doctype html>
         const jobKey = job.id || `${job.command}:${job.started_at}`;
         const expanded = Boolean(state.expandedJobs[jobKey]);
         const statusTone = jobStatusTone(job.status);
-        const canAcknowledge = job.status === "done" && !job.acknowledged_at;
+        const canAcknowledge = job.status !== "running" && !job.acknowledged_at;
         const canCancel = job.status === "running";
         const canResume = canResumeJob(job);
         return `
@@ -16680,7 +17038,7 @@ INDEX_HTML = r"""<!doctype html>
                 ${hasOutput ? `<span class="job-expand-hint">${expanded ? "ログを隠す" : "ログを表示"}</span>` : ""}
                 ${canCancel ? `<button class="job-stop-button" onclick='cancelJobLog(${arg(job.id)}, event)' data-icon="stop_circle">強制停止</button>` : ""}
                 ${canResume ? `<button class="job-resume-button" onclick='resumeJobLog(${arg(job.id)}, event)' data-icon="resume">途中から再実行</button>` : ""}
-                ${canAcknowledge ? `<button class="job-ack-button" onclick='acknowledgeJobLog(${arg(job.id)}, event)' data-icon="done">確認済み</button>` : ""}
+                ${canAcknowledge ? `<button class="job-ack-button" onclick='acknowledgeJobLog(${arg(job.id)}, event)' data-icon="visibility_off">非表示</button>` : ""}
               </div>
             </div>
             ${job.account_name || job.template_name ? `<div class="meta">${job.account_name ? `${esc(job.account_name)} / ` : ""}${esc(job.label || job.kind || "")}${job.template_name ? " / " + esc(job.template_name) : ""}</div>` : ""}
@@ -16783,11 +17141,48 @@ INDEX_HTML = r"""<!doctype html>
         }
         delete state.expandedJobs[jobId];
         render();
-        toast("完了ログを確認済みにしました");
+        toast("実行ログを非表示にしました");
       } catch (err) {
         if (button) {
           button.disabled = false;
           button.removeAttribute("data-loading");
+        }
+        toast(err.message, true);
+      }
+    }
+
+    async function resetJobLogs(event = null) {
+      const button = event?.currentTarget || $("reset-job-logs");
+      const resettableJobs = (state.data?.jobs || []).filter((job) => !job.acknowledged_at && job.status !== "running");
+      if (!resettableJobs.length) {
+        toast("非表示にできる実行ログはありません");
+        return;
+      }
+      const runningCount = (state.data?.jobs || []).filter((job) => !job.acknowledged_at && job.status === "running").length;
+      const suffix = runningCount ? `\n実行中ログ ${runningCount}件は残します。` : "";
+      const confirmed = window.confirm(`表示中の実行ログ ${resettableJobs.length}件を非表示にします。${suffix}`);
+      if (!confirmed) return;
+      try {
+        if (button) {
+          button.disabled = true;
+          button.dataset.loading = "true";
+          button.textContent = "リセット中";
+        }
+        const data = await api("/api/job/acknowledge-visible", {
+          method: "POST",
+          body: JSON.stringify({ job_ids: resettableJobs.map((job) => job.id).filter(Boolean) }),
+        });
+        if (state.data) {
+          state.data.jobs = data.result?.jobs || [];
+        }
+        state.expandedJobs = {};
+        render();
+        toast(`実行ログ ${data.result?.acknowledged_count || resettableJobs.length}件を非表示にしました`);
+      } catch (err) {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+          button.textContent = "実行ログリセット";
         }
         toast(err.message, true);
       }
@@ -16820,9 +17215,16 @@ INDEX_HTML = r"""<!doctype html>
 
     async function reloadSheet() {
       try {
-        await api("/api/sheet/reload", { method: "POST", body: "{}" });
+        const data = await api("/api/sheet/reload", { method: "POST", body: "{}" });
         await refresh();
-        toast("最新スプレッドシートを読み込みました");
+        const cleanup = data.sheet?.local_cleanup || {};
+        const removed = Number(cleanup.removed_accounts?.length || 0);
+        const moved = Number(cleanup.updated_task_rows?.length || 0);
+        const suffix = [
+          removed ? `削除済みアカウント ${removed}件をローカルから除外` : "",
+          moved ? `行移動 ${moved}件を反映` : "",
+        ].filter(Boolean).join(" / ");
+        toast(`最新スプレッドシートを読み込みました${suffix ? " / " + suffix : ""}`);
       } catch (err) {
         toast(err.message, true);
       }
@@ -17957,6 +18359,7 @@ INDEX_HTML = r"""<!doctype html>
     $("generate-all-images").addEventListener("click", (event) => generateAllImages(event.currentTarget));
     $("validate-all-checks").addEventListener("click", (event) => validateAllChecks(event.currentTarget));
     $("regenerate-failed-validation-posts").addEventListener("click", (event) => generateFailedValidationPosts(event.currentTarget));
+    $("reset-job-logs").addEventListener("click", resetJobLogs);
     $("new-template").addEventListener("click", () => openTemplateEditor("new"));
     $("new-template-main").addEventListener("click", () => openTemplateEditor("new"));
     $("close-template-editor").addEventListener("click", () => $("template-editor").close());
