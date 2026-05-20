@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import platform
+import re
 import subprocess
 import socket
 import sys
@@ -314,6 +315,81 @@ def approval_key(account_name: str, kind: str) -> str:
     return f"{account_name}::{kind}"
 
 
+def template_preview_path(template_name: str) -> Path | None:
+    clean_name = Path(str(template_name or "")).stem
+    if not clean_name:
+        return None
+    for ext in (".png", ".jpg", ".jpeg", ".webp"):
+        candidate = IMAGE_PROMPT_TEMPLATES_DIR / "_previews" / f"{clean_name}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def resolve_reference_path(value: str) -> Path | None:
+    raw = str(value or "").strip().strip("`'\"")
+    if not raw or raw.lower() in {"none", "なし"}:
+        return None
+    path_text = raw.split("  ", 1)[0].strip()
+    path_text = re.split(r"\s+\(", path_text, maxsplit=1)[0].strip()
+    candidate = Path(path_text)
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    return candidate if candidate.exists() and candidate.is_file() else None
+
+
+def image_source_info(prompt_text: str, template_name: str) -> dict[str, Any]:
+    sources: list[str] = []
+    reference_path: Path | None = None
+    patterns = (
+        re.compile(r"^\s*(?:[-*]\s*)?(reference image path|source reference|gafoo source reference|参考画像)\s*[:：]\s*(.+?)\s*$", re.I),
+        re.compile(r"^\s*(?:[-*]\s*)?(source)\s*[:：]\s*(.+?)\s*$", re.I),
+    )
+
+    def collect(text: str) -> None:
+        nonlocal reference_path
+        for line in str(text or "").splitlines():
+            for pattern in patterns:
+                match = pattern.match(line)
+                if not match:
+                    continue
+                label = match.group(1).strip()
+                value = match.group(2).strip()
+                if not value:
+                    break
+                display = f"{label}: {value}"
+                if display not in sources:
+                    sources.append(display)
+                if reference_path is None:
+                    reference_path = resolve_reference_path(value)
+                break
+
+    collect(prompt_text)
+    clean_template_name = str(template_name or "").strip()
+    if clean_template_name:
+        template_path = IMAGE_PROMPT_TEMPLATES_DIR / (clean_template_name if clean_template_name.endswith((".md", ".txt")) else f"{clean_template_name}.md")
+        collect(read_text(template_path))
+
+    preview_path = template_preview_path(clean_template_name)
+    summary_parts = []
+    if clean_template_name:
+        summary_parts.append(f"画風テンプレ: {clean_template_name}")
+    if sources:
+        summary_parts.append(sources[0])
+    elif preview_path:
+        summary_parts.append(f"テンプレ見本画像: {rel_to_root(preview_path)}")
+
+    return {
+        "templateName": clean_template_name,
+        "templatePreviewPath": rel_to_root(preview_path) if preview_path else "",
+        "templatePreviewBase64": image_data_uri(preview_path),
+        "referencePath": rel_to_root(reference_path) if reference_path else "",
+        "referenceThumbnailBase64": image_data_uri(reference_path),
+        "sourceLines": sources,
+        "summary": " / ".join(summary_parts),
+    }
+
+
 def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, Any]:
     approvals = read_json(APPROVALS_PATH, {})
     validation = read_json(IMAGE_VALIDATION_PATH, {})
@@ -364,6 +440,7 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
             history_image_path = image_path or account_dir / (image_names[1] if len(image_names) > 1 else image_names[0])
             normalized_account_name = normalize_account_name(account_dir.name)
             task = task_index.get((normalized_account_name, kind), {})
+            prompt_template_name = str(task.get("prompt_template_name", "") if isinstance(task, dict) else "")
             task_region = region_for_slot(kind, task.get("region", "") if isinstance(task, dict) else "")
             region = sheet_region_index.get((normalized_account_name, kind)) or task_region
             key = approval_key(account_dir.name, kind)
@@ -385,6 +462,8 @@ def build_jmty_snapshot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict[str, An
                     "postSyncStatus": "local_only" if post_text else "missing",
                     "promptText": prompt_text,
                     "promptPreview": preview_text(prompt_text, 120),
+                    "promptTemplateName": prompt_template_name,
+                    "imageSourceInfo": image_source_info(prompt_text, prompt_template_name),
                     "hasPost": bool(post_text),
                     "hasPrompt": bool(prompt_text),
                     "hasImage": image_path is not None,

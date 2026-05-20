@@ -53,6 +53,16 @@ export type JmtySlotState = {
   postSyncStatus?: PostSyncStatus;
   promptText?: string;
   promptPreview: string;
+  promptTemplateName?: string;
+  imageSourceInfo?: {
+    templateName?: string;
+    templatePreviewPath?: string;
+    templatePreviewBase64?: string;
+    referencePath?: string;
+    referenceThumbnailBase64?: string;
+    sourceLines?: string[];
+    summary?: string;
+  };
   hasPost: boolean;
   hasPrompt: boolean;
   hasImage: boolean;

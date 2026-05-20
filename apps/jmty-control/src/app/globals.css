@@ -523,6 +523,43 @@ pre {
 }
 .web-image-empty { display: grid; place-items: center; color: var(--muted); }
 .web-preview { color: #344054; font-size: 13px; line-height: 1.55; min-height: 58px; }
+.web-source-audit {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475467;
+  font-size: 12px;
+}
+.web-source-audit strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+.web-source-audit div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.web-source-audit img {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  background: #fff;
+}
+.web-source-audit span,
+.web-source-audit small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.web-source-audit small {
+  color: var(--muted);
+}
 .web-badge,
 .web-pill {
   display: inline-flex;

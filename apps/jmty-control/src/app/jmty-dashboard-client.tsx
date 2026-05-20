@@ -132,6 +132,22 @@ function historyKey(account: JmtyAccountState, slot: JmtySlotState, type: "post"
   return `${account.accountName}::${slot.kind}::${type}`;
 }
 
+function imageSourceSummary(slot: JmtySlotState) {
+  const info = slot.imageSourceInfo;
+  const firstLine = Array.isArray(info?.sourceLines) ? info?.sourceLines[0] : "";
+  return info?.summary || firstLine || (slot.promptTemplateName ? `画風テンプレ: ${slot.promptTemplateName}` : "");
+}
+
+function imageSourceThumb(slot: JmtySlotState) {
+  const info = slot.imageSourceInfo;
+  return info?.referenceThumbnailBase64 || info?.templatePreviewBase64 || "";
+}
+
+function imageSourcePath(slot: JmtySlotState) {
+  const info = slot.imageSourceInfo;
+  return info?.referencePath || info?.templatePreviewPath || "";
+}
+
 function FieldPayloadForm({
   children,
   onSubmit,
@@ -252,6 +268,9 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
   function renderSlotCard(account: JmtyAccountState, slot: JmtySlotState, mode: "dashboard" | "image" = "dashboard") {
     const recent = latestSlotJob(recentBySlot, account.accountName, slot.kind);
     const imageHistoryKey = historyKey(account, slot, "image");
+    const sourceSummary = imageSourceSummary(slot);
+    const sourceThumb = imageSourceThumb(slot);
+    const sourcePath = imageSourcePath(slot);
     return (
       <article className="web-slot-card" key={`${account.accountName}-${slot.kind}`}>
         <div className="web-slot-head">
@@ -274,6 +293,16 @@ export default function JmtyDashboardClient({ snapshot, jobs, user }: Props) {
           <span className={`web-badge ${slot.hasPrompt ? "done" : "queued"}`}>プロンプト {slot.hasPrompt ? "あり" : "なし"}</span>
           <span className={`web-badge ${slot.validationStatus === "ok" ? "done" : "queued"}`}>{slot.validationStatus || "未検証"}</span>
         </div>
+        {sourceSummary ? (
+          <div className="web-source-audit">
+            <strong>参照元</strong>
+            <div>
+              {sourceThumb ? <img src={sourceThumb} alt="参照元サムネイル" /> : null}
+              <span title={sourcePath || sourceSummary}>{sourceSummary}</span>
+            </div>
+            {sourcePath ? <small>{sourcePath}</small> : null}
+          </div>
+        ) : null}
         {recent ? <p className="web-job-hint">最新ジョブ: {jobLabels[recent.type] || recent.type} / {statusLabels[recent.status]}</p> : null}
         <div className="web-action-grid">
           <button onClick={() => queueJob("generate_image", slotPayload(account, slot))}>画像生成</button>

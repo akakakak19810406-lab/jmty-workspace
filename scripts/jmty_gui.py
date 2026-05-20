@@ -1952,6 +1952,8 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
         sheet_column = str(sheet_values.get(post_field, {}).get("column", "") or "")
         sync_status = post_sync_status(kind, post_text if local_post_exists else "", sheet_post)
         image_path = paths["image"]
+        prompt_text = read_text_if_exists(paths["prompt"]).strip() or str(task.get("prompt_text") or "")
+        prompt_template_name = str(task.get("prompt_template_name") or "")
         account["slots"][kind] = {
             "kind": kind,
             "label": LABELS[kind],
@@ -1969,7 +1971,9 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
             "post_sync_field": post_field,
             "post_sync_cell": sheet_cell,
             "post_sync_column": sheet_column or str(task.get("post_col") or ""),
-            "prompt_text": "",
+            "prompt_text": prompt_text,
+            "prompt_template_name": prompt_template_name,
+            "image_source_info": image_source_info(prompt_text, prompt_template_name),
             "image_exists": image_path.exists(),
             "image_path": rel_to_root(image_path) if path_in_root(image_path) else "",
             "image_url": file_url(image_path),
@@ -2037,6 +2041,9 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                 local_post = strip_markdown_markers(read_text_if_exists(post_path)) if local_post_exists else ""
                 display_post = local_post if local_post_exists else sheet_post
                 key = approval_key(account_name, kind)
+                prompt_text = read_text_if_exists(prompt_path).strip()
+                slot_task = task_for_slot(output_root, account_name, kind)
+                prompt_template_name = str(slot_task.get("prompt_template_name") or "") if slot_task else ""
                 account["slots"][kind] = {
                     "kind": kind,
                     "label": LABELS[kind],
@@ -2054,7 +2061,9 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     "post_sync_field": post_field,
                     "post_sync_cell": sheet_cell,
                     "post_sync_column": sheet_column,
-                    "prompt_text": "",
+                    "prompt_text": prompt_text,
+                    "prompt_template_name": prompt_template_name,
+                    "image_source_info": image_source_info(prompt_text, prompt_template_name),
                     "image_exists": image_path.exists(),
                     "image_path": rel_to_root(image_path) if path_in_root(image_path) else "",
                     "image_url": file_url(image_path),
@@ -5688,6 +5697,83 @@ def selected_template_note(template: dict[str, Any] | None, kind: str) -> str:
 def short_context_text(text: str, limit: int = 1200) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", str(text or "").strip())
     return cleaned[:limit].rstrip()
+
+
+def template_preview_path(template_name: str, templates_dir: Path = DEFAULT_TEMPLATES_DIR) -> Path | None:
+    clean_name = Path(str(template_name or "")).stem
+    if not clean_name:
+        return None
+    previews_dir = templates_dir / "_previews"
+    for ext in (".png", ".jpg", ".jpeg", ".webp"):
+        candidate = previews_dir / f"{clean_name}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def resolve_reference_path(value: str) -> Path | None:
+    raw = str(value or "").strip().strip("`'\"")
+    if not raw or raw.lower() in {"none", "なし"}:
+        return None
+    path_text = raw.split("  ", 1)[0].strip()
+    path_text = re.split(r"\s+\(", path_text, maxsplit=1)[0].strip()
+    candidate = Path(path_text)
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    return candidate if candidate.exists() and candidate.is_file() else None
+
+
+def image_source_info(prompt_text: str, template_name: str, templates_dir: Path = DEFAULT_TEMPLATES_DIR) -> dict[str, Any]:
+    sources: list[str] = []
+    reference_path: Path | None = None
+    patterns = (
+        re.compile(r"^\s*(?:[-*]\s*)?(reference image path|source reference|gafoo source reference|参考画像)\s*[:：]\s*(.+?)\s*$", re.I),
+        re.compile(r"^\s*(?:[-*]\s*)?(source)\s*[:：]\s*(.+?)\s*$", re.I),
+    )
+
+    def collect(text: str) -> None:
+        nonlocal reference_path
+        for line in str(text or "").splitlines():
+            for pattern in patterns:
+                match = pattern.match(line)
+                if not match:
+                    continue
+                label = match.group(1).strip()
+                value = match.group(2).strip()
+                if not value:
+                    break
+                display = f"{label}: {value}"
+                if display not in sources:
+                    sources.append(display)
+                if reference_path is None:
+                    reference_path = resolve_reference_path(value)
+                break
+
+    collect(prompt_text)
+    clean_template_name = str(template_name or "").strip()
+    if clean_template_name:
+        template_path = templates_dir / (clean_template_name if clean_template_name.endswith((".md", ".txt")) else f"{clean_template_name}.md")
+        if template_path.exists():
+            collect(read_text_if_exists(template_path))
+
+    preview_path = template_preview_path(clean_template_name, templates_dir)
+    summary_parts = []
+    if clean_template_name:
+        summary_parts.append(f"画風テンプレ: {clean_template_name}")
+    if sources:
+        summary_parts.append(sources[0])
+    elif preview_path:
+        summary_parts.append(f"テンプレ見本画像: {rel_to_root(preview_path)}")
+
+    return {
+        "template_name": clean_template_name,
+        "template_preview_path": rel_to_root(preview_path) if preview_path and path_in_root(preview_path) else "",
+        "template_preview_url": file_url(preview_path) if preview_path else "",
+        "reference_path": rel_to_root(reference_path) if reference_path and path_in_root(reference_path) else "",
+        "reference_url": file_url(reference_path) if reference_path else "",
+        "source_lines": sources,
+        "summary": " / ".join(summary_parts),
+    }
 
 
 def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_name: str, kind: str) -> dict[str, Any]:
@@ -10493,6 +10579,44 @@ INDEX_HTML = r"""<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .source-audit {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface-soft);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .source-audit-title {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .source-audit-body {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .source-audit-thumb {
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      object-fit: cover;
+      background: #fff;
+    }
+    .source-audit-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      line-height: 1.35;
+    }
     .slot-media {
       position: relative;
       min-width: 0;
@@ -12314,7 +12438,7 @@ INDEX_HTML = r"""<!doctype html>
       .account-name, .slot { border-right: 0; border-bottom: 1px solid var(--line); }
       .slot:last-child { border-bottom: 0; }
       .slot { grid-template-columns: minmax(120px, 180px) minmax(0, 1fr); grid-template-rows: auto auto auto; }
-      .slot-title, .slot-meta, .slot-excerpt, .validation-result, .post-actions { grid-column: 2; }
+      .slot-title, .slot-meta, .slot-excerpt, .source-audit, .validation-result, .post-actions { grid-column: 2; }
       .slot-media { grid-row: 1 / span 6; min-height: 120px; }
       .slot-media .thumb { min-height: 120px; }
       .field-map { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
@@ -12396,7 +12520,7 @@ INDEX_HTML = r"""<!doctype html>
       .weekly-bulk-steps { grid-template-columns: 1fr; }
       .quick-item { align-items: stretch; flex-direction: column; }
       .slot { grid-template-columns: 1fr; }
-      .slot-title, .slot-meta, .slot-excerpt, .validation-result, .post-actions { grid-column: auto; }
+      .slot-title, .slot-meta, .slot-excerpt, .source-audit, .validation-result, .post-actions { grid-column: auto; }
       .slot-media { grid-row: auto; }
       .two { grid-template-columns: 1fr; }
       .field-map, .mapping-grid { grid-template-columns: 1fr; }
@@ -13572,7 +13696,17 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div class="modal-body preview-body">
       <img class="preview-image" id="image-preview-img" alt="">
-      <div class="code" id="image-preview-path"></div>
+      <div class="preview-details" style="display: flex; flex-direction: column; gap: 12px; min-width: 0;">
+        <div id="image-preview-template-container" style="display: none;">
+          <span class="pill outline" style="font-weight: bold; background: var(--surface-soft); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line);"><span class="material-icons" style="font-size:14px;vertical-align:middle;margin-right:4px;">palette</span>適用画風: <span id="image-preview-template"></span></span>
+        </div>
+        <div id="image-preview-source" style="display: none;"></div>
+        <div class="code" id="image-preview-path" style="max-height: 120px;"></div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 12px; font-weight: bold; color: var(--text-soft);">使用された画像プロンプト:</span>
+          <div class="code" id="image-preview-prompt" style="max-height: 220px; font-size: 11px;"></div>
+        </div>
+      </div>
     </div>
   </dialog>
   <input type="file" id="image-picker" accept="image/*" hidden>
@@ -16770,6 +16904,38 @@ INDEX_HTML = r"""<!doctype html>
       return haystack.includes(query);
     }
 
+    function sourceAuditSummary(slot) {
+      const info = slot.image_source_info || {};
+      const lines = Array.isArray(info.source_lines) ? info.source_lines : [];
+      return info.summary || lines[0] || (info.template_name ? `画風テンプレ: ${info.template_name}` : "");
+    }
+
+    function sourceAuditThumb(info) {
+      if (info?.reference_url) return { url: info.reference_url, label: "参照画像" };
+      if (info?.template_preview_url) return { url: info.template_preview_url, label: "見本画像" };
+      return null;
+    }
+
+    function renderSourceAudit(slot, compact = false) {
+      const info = slot.image_source_info || {};
+      const summary = sourceAuditSummary(slot);
+      if (!summary) return "";
+      const thumb = sourceAuditThumb(info);
+      const pathText = info.reference_path || info.template_preview_path || "";
+      return `
+        <div class="source-audit">
+          <div class="source-audit-title"><span class="material-icons" style="font-size:14px;">image_search</span>参照元</div>
+          <div class="source-audit-body">
+            ${thumb ? `<img class="source-audit-thumb" src="${esc(thumb.url)}" alt="${esc(thumb.label)}">` : ""}
+            <div class="source-audit-text">
+              <div>${esc(summary)}</div>
+              ${!compact && pathText ? `<div title="${esc(pathText)}">${esc(pathText)}</div>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     function renderSlot(account, slot) {
       const status = slotStatus(slot);
       const statusText = statusLabel(status);
@@ -16818,6 +16984,7 @@ INDEX_HTML = r"""<!doctype html>
             <span class="pill">${esc(slot.region || "地域なし")}</span>
             ${slot.salary_text ? `<span class="pill">${esc(slot.salary_text)}</span>` : ""}
             ${postSyncBadge(slot)}
+            ${slot.prompt_template_name ? `<span class="pill outline" title="画風テンプレート: ${esc(slot.prompt_template_name)}" style="border: 1px dashed var(--line);"><span class="material-icons" style="font-size:12px;vertical-align:middle;margin-right:2px;color:var(--text-soft);">palette</span>${esc(slot.prompt_template_name.replace(/^(common_|factory_|remote_)/, ""))}</span>` : ""}
           </div>
           <div class="slot-excerpt" title="${esc(slot.post_text || "")}">${esc(excerpt || "投稿文なし")}</div>
           <div class="slot-media ${slot.image_url ? "has-image" : "is-empty"} ${job ? "is-generating" : ""}">
@@ -16825,6 +16992,7 @@ INDEX_HTML = r"""<!doctype html>
             ${mediaActions}
             ${reviewActions}
           </div>
+          ${renderSourceAudit(slot, true)}
           ${renderValidationResult(slot, account.account_name, slot.kind, validationJob)}
           <div class="post-actions">
             <button onclick='openPostManagementForSlot(${arg(account.account_name)}, ${arg(slot.kind)})' data-icon="article" ${slot.empty ? "disabled" : ""}>投稿文管理に移動</button>
@@ -18085,6 +18253,19 @@ INDEX_HTML = r"""<!doctype html>
         slot.validation?.checked_at ? `画像検証: ${slot.validation.label || slot.validation.status} / ${slot.validation.checked_at}` : "",
         ["ok", "acknowledged"].includes(slot.validation?.status || "") ? "" : slot.validation?.summary || "",
       ].filter(Boolean).join("\n");
+
+      const tmplName = slot.prompt_template_name || "";
+      if (tmplName) {
+        $("image-preview-template").textContent = tmplName;
+        $("image-preview-template-container").style.display = "block";
+      } else {
+        $("image-preview-template-container").style.display = "none";
+      }
+      const sourceHtml = renderSourceAudit(slot, false);
+      $("image-preview-source").innerHTML = sourceHtml ? sourceHtml : "";
+      $("image-preview-source").style.display = sourceHtml ? "grid" : "none";
+      $("image-preview-prompt").textContent = slot.prompt_text || "プロンプト情報なし";
+
       $("image-preview").showModal();
     }
 
@@ -18468,6 +18649,8 @@ INDEX_HTML = r"""<!doctype html>
     $("image-preview").addEventListener("close", () => {
       $("image-preview-img").removeAttribute("src");
       $("image-preview-path").textContent = "";
+      $("image-preview-source").innerHTML = "";
+      $("image-preview-source").style.display = "none";
     });
     $("preview-sheet-save").addEventListener("click", renderSheetEditPreview);
     $("save-sheet-account").addEventListener("click", saveSheetAccount);
