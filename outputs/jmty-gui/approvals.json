@@ -1,42 +1,42 @@
 {
   "加藤直樹::remote1": {
     "approved": false,
-    "saved_at": "2026-05-18 07:06:51",
+    "saved_at": "2026-05-25 23:04:31",
     "image_path": "outputs/jmty-weekly/current/加藤直樹/在宅1.jpg"
   },
   "斎藤孝次::factory": {
     "approved": false,
-    "saved_at": "2026-05-18 07:06:44",
+    "saved_at": "2026-05-25 23:01:57",
     "image_path": "outputs/jmty-weekly/current/斎藤孝次/工場.jpg"
   },
   "加藤直樹::factory": {
     "approved": false,
-    "saved_at": "2026-05-18 06:08:40",
+    "saved_at": "2026-05-25 23:02:21",
     "image_path": "outputs/jmty-weekly/current/加藤直樹/工場.jpg"
   },
   "斎藤孝次::remote1": {
     "approved": false,
-    "saved_at": "2026-05-20 21:46:35",
+    "saved_at": "2026-05-25 23:03:57",
     "image_path": "outputs/jmty-weekly/current/斎藤孝次/在宅1.jpg"
   },
   "カツアキ::factory": {
     "approved": false,
-    "saved_at": "2026-05-18 06:08:42",
+    "saved_at": "2026-05-25 23:10:40",
     "image_path": "outputs/jmty-weekly/current/カツアキ/工場.jpg"
   },
   "坪井 清栄 （あいはら）::factory": {
     "approved": false,
-    "saved_at": "2026-05-18 06:10:29",
+    "saved_at": "2026-05-25 23:08:30",
     "image_path": "outputs/jmty-weekly/current/坪井 清栄 （あいはら）/工場.jpg"
   },
   "斎藤孝次::remote2": {
     "approved": false,
-    "saved_at": "2026-05-18 06:11:40",
+    "saved_at": "2026-05-25 23:06:07",
     "image_path": "outputs/jmty-weekly/current/斎藤孝次/在宅2.jpg"
   },
   "加藤直樹::remote2": {
     "approved": false,
-    "saved_at": "2026-05-18 06:12:02",
+    "saved_at": "2026-05-25 23:06:31",
     "image_path": "outputs/jmty-weekly/current/加藤直樹/在宅2.jpg"
   },
   "坪井 清栄 （あいはら）::remote2": {
@@ -46,7 +46,7 @@
   },
   "カツアキ::remote2": {
     "approved": false,
-    "saved_at": "2026-05-18 06:15:47",
+    "saved_at": "2026-05-25 23:14:31",
     "image_path": "outputs/jmty-weekly/current/カツアキ/在宅2.jpg"
   },
   "株式会社Keystone::remote1": {
@@ -116,7 +116,7 @@
   },
   "坪井 清栄 （あいはら）::remote1": {
     "approved": false,
-    "saved_at": "2026-05-18 06:45:05",
+    "saved_at": "2026-05-25 23:11:04",
     "image_path": "outputs/jmty-weekly/current/坪井 清栄 （あいはら）/在宅1.jpg"
   },
   "Sho::factory": {
@@ -128,5 +128,10 @@
     "approved": false,
     "saved_at": "2026-05-18 06:48:40",
     "image_path": "outputs/jmty-weekly/current/新城安司/工場.jpg"
+  },
+  "カツアキ::remote1": {
+    "approved": false,
+    "saved_at": "2026-05-25 23:12:40",
+    "image_path": "outputs/jmty-weekly/current/カツアキ/在宅1.jpg"
   }
 }
