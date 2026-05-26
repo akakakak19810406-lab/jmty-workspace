@@ -980,6 +980,8 @@ def load_prompt_templates(templates_dir: Path, task_type: str) -> list[tuple[str
         stem = path.stem.lower()
         if any(alias.lower() in stem for alias in aliases):
             text = path.read_text(encoding="utf-8").strip()
+            if "banana" in text.lower() or "gafoo source reference" in text.lower():
+                continue
             if text:
                 candidates.append((path.name, text))
     return candidates
@@ -989,8 +991,7 @@ def choose_prompt_template(templates_dir: Path, task_type: str, account_no: str,
     templates = load_prompt_templates(templates_dir, task_type)
     if not templates:
         return "", ""
-    rng = random.Random(f"{account_no}:{row_idx}:{task_type}:{label_ja}:prompt-template")
-    return templates[rng.randrange(len(templates))]
+    return random.SystemRandom().choice(templates)
 
 
 def render_prompt_template(template_text: str, values: dict[str, str]) -> str:
@@ -998,6 +999,44 @@ def render_prompt_template(template_text: str, values: dict[str, str]) -> str:
     for key, value in values.items():
         rendered = rendered.replace("{{" + key + "}}", value)
     return rendered
+
+
+PREFECTURE_NAMES_FOR_IMAGE_REDACTION = (
+    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
+    "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
+    "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+    "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
+    "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+)
+
+
+def remove_region_names_for_image_prompt(text: str, region: str = "") -> str:
+    result = str(text or "")
+    aliases = set(PREFECTURE_NAMES_FOR_IMAGE_REDACTION)
+    cleaned_region = clean_display_text(region)
+    if cleaned_region:
+        aliases.add(cleaned_region)
+        aliases.add(normalize_prefecture(cleaned_region))
+    for alias in sorted(aliases, key=len, reverse=True):
+        if alias:
+            result = result.replace(alias, "対象地域")
+    result = re.sub(r"対象地域(?:県|府|都|道)", "対象地域", result)
+    return result
+
+
+def sanitize_image_template_prompt(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in str(text or "").splitlines():
+        lowered = line.lower()
+        if "banana" in lowered or "gafoo source reference" in lowered:
+            continue
+        line = line.replace("{{region}}", "地名なし")
+        line = re.sub(r"\bRegion\b\s*[:：]?\s*「?地名なし」?", "Location text: do not include", line, flags=re.IGNORECASE)
+        line = re.sub(r"地域[:：]?\s*「?地名なし」?", "地名表記なし", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
 
 
 def build_banner_prompt(
@@ -1011,21 +1050,21 @@ def build_banner_prompt(
     prompt_template_name: str = "",
 ) -> str:
     post_text = strip_markdown_markers(post_text)
-    region_text = clean_display_text(region)
-    region_note = f"投稿先地域は「{region_text or '未設定'}」を正として扱い、元の投稿文に別地域が残っていても上書きして解釈する。"
+    prompt_post_text = remove_region_names_for_image_prompt(post_text, region)
+    location_note = "画像生成プロンプトと画像内テキストには、都道府県名・市区町村名・駅名などの地名を入れない。"
     template_values = {
         "account_name": account_name,
         "task_type": task_type,
-        "region": region_text or "未設定",
+        "region": "地名なし",
         "salary_text": salary_text,
         "role_phrase": role_phrase,
-        "post_text": post_text.strip(),
-        "region_note": region_note,
+        "post_text": prompt_post_text.strip(),
+        "region_note": location_note,
     }
     if prompt_template:
-        rendered = render_prompt_template(prompt_template, template_values)
+        rendered = render_prompt_template(sanitize_image_template_prompt(prompt_template), template_values)
         source = f"テンプレート: {prompt_template_name}\n\n" if prompt_template_name else ""
-        return f"{source}{rendered.strip()}\n\n{region_note}\n\n元の投稿文:\n{post_text.strip()}"
+        return f"{source}{rendered.strip()}\n\n{location_note}\n\n地名を伏せた投稿文:\n{prompt_post_text.strip()}"
 
     common = [
         "あなたは求人広告バナーを作るデザイナーです。",
@@ -1038,8 +1077,7 @@ def build_banner_prompt(
     if task_type == "factory":
         specific = [
             "カテゴリ: 工場求人",
-            f"投稿先地域の想定: {region_text or '未設定'}",
-            region_note,
+            location_note,
             f"職種表記: {role_phrase}",
             f"給与表記: {salary_text}",
             "工場・製造の仕事だとひと目でわかるビジュアル。",
@@ -1048,15 +1086,14 @@ def build_banner_prompt(
     else:
         specific = [
             f"カテゴリ: 在宅求人（{task_type}）",
-            f"投稿先地域の想定: {region_text or '未設定'}",
-            region_note,
+            location_note,
             f"職種表記: {role_phrase}",
             f"給与表記: {salary_text}",
             "完全在宅、全国OK、出勤不要だとひと目でわかるビジュアル。",
             "ノートPC、在宅ワーク、チャット、オンライン業務の雰囲気を反映する。",
         ]
     body = "\n".join(common + specific)
-    return f"{body}\n\nアカウント名: {account_name}\n\n元の投稿文:\n{post_text.strip()}"
+    return f"{body}\n\nアカウント名: {account_name}\n\n地名を伏せた投稿文:\n{prompt_post_text.strip()}"
 
 
 def extract_salary_text(source_text: str, task_kind: str) -> str:
@@ -1420,6 +1457,18 @@ def has_location_condition(post_text: str, task_kind: str, region: str) -> bool:
     return bool(region_text and region_text in text) or "勤務地" in text
 
 
+def remote_post_has_region_name(post_text: str, region: str = "") -> bool:
+    text = str(post_text or "")
+    if not text:
+        return False
+    region_text = clean_display_text(region)
+    candidates = set(PREFECTURE_NAMES_FOR_IMAGE_REDACTION)
+    if region_text:
+        candidates.add(region_text)
+        candidates.add(normalize_prefecture(region_text))
+    return any(candidate and candidate in text for candidate in candidates)
+
+
 def validate_sheet_post_quality(task: dict, sheet_post_text_value: str, post_conditions: dict[str, str], effective_task_kind: str = "") -> list[str]:
     issues: list[str] = []
     text = strip_markdown_markers(sheet_post_text_value)
@@ -1446,6 +1495,8 @@ def validate_sheet_post_quality(task: dict, sheet_post_text_value: str, post_con
         issues.append("在宅投稿文に工場系の文言が強く出ています")
     if task_kind in {"remote1", "remote2"} and "完全在宅" not in text:
         issues.append("在宅投稿文に完全在宅の表記がありません")
+    if task_kind in {"remote1", "remote2"} and remote_post_has_region_name(text, str(task.get("region") or "")):
+        issues.append("在宅投稿文に地名が含まれています")
     return issues
 
 
@@ -1673,6 +1724,9 @@ def build_post_text(
     role_phrase = role_override.strip() or extract_role_phrase(source_text, task_type)
     region_text = clean_display_text(region)
     variation_name, variation_direction = variation or ("標準", "案件情報に沿って自然に書く。")
+    if task_type in {"remote1", "remote2"} and ("地域" in variation_name or "地域" in variation_direction):
+        variation_name = "在宅訴求"
+        variation_direction = "完全在宅で出勤不要な働き方を、自分ごとに感じやすい導入にする。"
 
     if task_type == "factory":
         title = f"【工場】{variation_name}向け／{role_phrase}｜{salary_text}"
@@ -1742,7 +1796,7 @@ def build_post_text(
     else:
         title = f"【在宅】{variation_name}向け／{role_phrase}｜{salary_text}"
         body = [
-            f"{region_text or '投稿地域'}からでも応募しやすい、完全在宅の募集です。",
+            "出勤不要で始めやすい、完全在宅の募集です。",
             f"今回は「{variation_name}」を重視する方に向けて、働き方が伝わるようにまとめています。",
             f"今回の業務は、{role_phrase}を中心としたデスクワークやオンライン業務が中心。",
             f"{salary_text}を目安に、出勤不要で仕事を進めたい方に相性のよい内容です。",
@@ -1931,6 +1985,8 @@ def validate_post_text(task: dict, post_text: str) -> None:
         raise RuntimeError(f"工場投稿文に在宅系の文言があります: {task['account_name']} / {task['label_ja']}")
     if task["kind"] in {"remote1", "remote2"} and "完全在宅" not in post_text:
         raise RuntimeError(f"在宅投稿文に完全在宅の表記がありません: {task['account_name']} / {task['label_ja']}")
+    if task["kind"] in {"remote1", "remote2"} and remote_post_has_region_name(post_text, str(task.get("region") or "")):
+        raise RuntimeError(f"在宅投稿文に地名が含まれています: {task['account_name']} / {task['label_ja']}")
 
 
 def validate_task_files(output_root: Path, tasks: list[dict], ocr_workers: int | None = None) -> dict:
