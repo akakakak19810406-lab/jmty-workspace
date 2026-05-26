@@ -53,6 +53,10 @@ EXPECTED_IMAGE_FILENAMES = {
     "remote2": "在宅2.jpg",
 }
 
+
+def public_task_label(task_kind: str) -> str:
+    return "在宅" if str(task_kind) in {"remote1", "remote2", "remote"} else "工場"
+
 FACTORY_OCR_HINTS = ("工場", "製造", "月収", "寮", "ライン", "高収入")
 REMOTE_OCR_HINTS = ("在宅", "リモート", "自宅", "PC", "文章", "ライター", "オンライン")
 FACTORY_KIND_OCR_HINTS = ("工場", "製造", "寮", "ライン", "組立", "検査", "部品", "軽作業", "倉庫")
@@ -1054,7 +1058,7 @@ def build_banner_prompt(
     location_note = "画像生成プロンプトと画像内テキストには、都道府県名・市区町村名・駅名などの地名を入れない。"
     template_values = {
         "account_name": account_name,
-        "task_type": task_type,
+        "task_type": public_task_label(task_type),
         "region": "地名なし",
         "salary_text": salary_text,
         "role_phrase": role_phrase,
@@ -1085,7 +1089,7 @@ def build_banner_prompt(
         ]
     else:
         specific = [
-            f"カテゴリ: 在宅求人（{task_type}）",
+            "カテゴリ: 在宅求人",
             location_note,
             f"職種表記: {role_phrase}",
             f"給与表記: {salary_text}",
@@ -1680,17 +1684,20 @@ def render_prompt_document(task: dict | Task, image_path: Path, post_text: str, 
     account_name = task["account_name"] if isinstance(task, dict) else task.account_name
     row_idx = task["row_idx"] if isinstance(task, dict) else task.row_idx
     label_ja = task["label_ja"] if isinstance(task, dict) else task.label_ja
+    kind = task["kind"] if isinstance(task, dict) else task.kind
+    display_label = public_task_label(kind)
     region = task["region"] if isinstance(task, dict) else task.region
+    image_path_display = str(image_path) if display_label == "工場" else "内部管理ファイル"
     return "\n".join(
         [
-            f"# {label_ja} 画像プロンプト",
+            f"# {display_label} 画像プロンプト",
             "",
             "## メタ情報",
             f"- アカウント名: {account_name}",
             f"- 行番号: {row_idx}",
-            f"- 種別: {label_ja}",
+            f"- 種別: {display_label}",
             f"- 投稿先地域: {region or '未設定'}",
-            f"- 画像保存先: `{image_path}`",
+            f"- 画像保存先: `{image_path_display}`",
             "",
             "## 投稿文章",
             fenced(post_text),

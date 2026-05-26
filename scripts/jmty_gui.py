@@ -270,6 +270,10 @@ LABELS = {
     "remote2": "在宅2",
 }
 
+
+def public_generation_label(kind: str) -> str:
+    return "在宅" if normalize_kind(kind) in {"remote1", "remote2", "remote"} else LABELS.get(normalize_kind(kind), str(kind or ""))
+
 POST_FILENAMES = {
     "factory": "工場の投稿文章.md",
     "remote1": "在宅1の投稿文章.md",
@@ -2182,7 +2186,7 @@ def drive_sync_summary(output_root: Path) -> dict[str, Any]:
                 {
                     "account_name": account_name,
                     "kind": kind,
-                    "label": LABELS.get(kind, kind),
+                    "label": public_generation_label(kind),
                     "row_idx": task.get("row_idx"),
                     "image_exists": image_exists,
                     "post_exists": post_exists,
@@ -4200,7 +4204,7 @@ def compact_target_for_prompt(target: dict[str, Any], variation_profiles: dict[s
         "target_id": target_id,
         "account_name": target["account_name"],
         "kind": target["kind"],
-        "label": target["label"],
+        "label": public_generation_label(target.get("kind")),
         "row_idx": target.get("row_idx") or "",
         "region": "地名なし" if is_remote else region,
         "salary_text": target.get("salary_text") or "",
@@ -5617,10 +5621,10 @@ def create_generation_request(output_root: Path, payload: dict[str, Any], templa
     expected_path = ""
     expected_path = rel_to_root(resolve_task_paths(output_root, task)["image"] if task else image_path_for_slot(output_root, account_name, kind))
     lines = [
-        f"画像生成依頼 {account_name} / {LABELS[kind]}",
+        f"画像生成依頼 {account_name} / {public_generation_label(kind)}",
         "",
         f"- アカウント: {account_name}",
-        f"- 種別: {LABELS[kind]}",
+        f"- 種別: {public_generation_label(kind)}",
         f"- 保存先: {expected_path or '未生成'}",
         "",
         "Codexへの依頼",
@@ -5868,7 +5872,7 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_rules = image_rules_prompt(kind)
     first_line = next((line.strip() for line in image_post_text.splitlines() if line.strip()), "")
-    label = LABELS[kind]
+    label = public_generation_label(kind)
     context = "\n".join(
         [
             f"アカウント: {account_name}",
@@ -8349,6 +8353,7 @@ def build_post_rewrite_prompt(payload: dict[str, Any], field_info: dict[str, str
     region = str(payload.get("region") or "").strip()
     field_key = str(payload.get("field_key") or "")
     post_kind = post_kind_for_field(field_key)
+    slot_kind = slot_kind_for_post_field(field_key)
     is_remote = post_kind == "remote"
     if is_remote:
         current_text = short_context_text(remove_region_names_for_image_prompt(current_text, [region]), 6000)
@@ -8380,7 +8385,7 @@ def build_post_rewrite_prompt(payload: dict[str, Any], field_info: dict[str, str
             "- ユーザー指示と今回の制作方向が矛盾する場合は、ユーザー指示を優先する",
             "",
             f"アカウント: {account_name or '未指定'}",
-            f"対象: {field_info['label']} / {field_info['kind_label']}",
+            f"対象: {public_generation_label(slot_kind)}",
             f"地域: {'地名なし' if is_remote else (region or '未設定')}",
             "",
             "今回のランダム制作方向:",
