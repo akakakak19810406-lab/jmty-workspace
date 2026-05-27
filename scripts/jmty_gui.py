@@ -2586,6 +2586,8 @@ def sanitize_image_template_prompt(text: str) -> str:
 
 def image_region_instruction(kind: str, region: str, stale_regions: list[str]) -> str:
     label = LABELS.get(normalize_kind(kind), normalize_kind(kind))
+    if label in {"在宅1", "在宅2"}:
+        label = "在宅"
     stale = ""
     if stale_regions:
         stale = "\n- 古い投稿文・古いプロンプト由来の地域名は検出済みだが、画像プロンプトにも画像内テキストにも出さない。"
@@ -5865,6 +5867,9 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
         replace_conflicting_regions_for_image_prompt(post_text, region),
         [region],
     )
+    # 在宅用の画像内に在宅1・在宅2といった数値表記が混入するのを防ぐ強固なクレンジング
+    image_post_text = image_post_text.replace("在宅1", "在宅").replace("在宅2", "在宅")
+    
     template = select_template_for_slot(templates_dir, kind, image_post_text or post_text)
     template_text = sanitize_image_template_prompt(str(template.get("text") or "")) if template else ""
     template_note = selected_template_note(template, kind)
@@ -5872,7 +5877,13 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_rules = image_rules_prompt(kind)
     first_line = next((line.strip() for line in image_post_text.splitlines() if line.strip()), "")
+    
     label = public_generation_label(kind)
+    if label in {"在宅1", "在宅2"}:
+        label = "in-home"
+    if label == "in-home":
+        label = "在宅"
+        
     context = "\n".join(
         [
             f"アカウント: {account_name}",
@@ -10565,11 +10576,13 @@ INDEX_HTML = r"""<!doctype html>
     }
     .account-head {
       display: grid;
-      grid-template-columns: minmax(140px, 1.2fr) repeat(3, minmax(210px, 1fr));
+      grid-template-columns: minmax(132px, .78fr) repeat(3, minmax(0, 1fr));
       gap: 0;
       background: var(--surface-soft);
       border-bottom: 1px solid var(--line);
       --slot-validation-min-height: 0px;
+      min-width: 0;
+      overflow: hidden;
     }
     .account-name {
       padding: 12px;
@@ -10595,6 +10608,7 @@ INDEX_HTML = r"""<!doctype html>
       align-content: start;
       background: #fff;
       border-top: 3px solid transparent;
+      overflow: hidden;
     }
     .slot:last-child { border-right: 0; }
     .slot.ok { border-top-color: var(--green); }
@@ -10669,7 +10683,10 @@ INDEX_HTML = r"""<!doctype html>
     .slot-media {
       position: relative;
       min-width: 0;
+      width: 100%;
+      max-width: 100%;
       aspect-ratio: 1 / 1;
+      overflow: hidden;
       isolation: isolate;
     }
     .slot-media.has-image::after {
@@ -10713,6 +10730,7 @@ INDEX_HTML = r"""<!doctype html>
     .pill.priority-low { background: #f0f9ff; color: #026aa2; border-color: #b9e6fe; }
     .thumb {
       width: 100%;
+      max-width: 100%;
       height: 100%;
       aspect-ratio: 1 / 1;
       border: 1px solid var(--line);
@@ -10754,6 +10772,7 @@ INDEX_HTML = r"""<!doctype html>
     .thumb-button:hover .thumb-hint, .thumb-button:focus-visible .thumb-hint { opacity: 1; }
     .thumb img {
       width: 100%;
+      max-width: 100%;
       height: 100%;
       object-fit: cover;
       display: block;
@@ -10819,6 +10838,7 @@ INDEX_HTML = r"""<!doctype html>
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
+      max-width: calc(100% - 16px);
     }
     .media-actions { top: 8px; }
     .image-review-actions { bottom: 8px; }
@@ -10831,6 +10851,7 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 12px;
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
       background: rgba(255, 255, 255, .94);
       border-color: rgba(203, 213, 225, .82);
       box-shadow: 0 6px 18px rgba(15, 23, 42, .12);
