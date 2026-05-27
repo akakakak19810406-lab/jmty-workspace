@@ -1064,8 +1064,8 @@ def remove_region_names_for_image_prompt(text: str, region: str = "") -> str:
         aliases.add(normalize_prefecture(cleaned_region))
     for alias in sorted(aliases, key=len, reverse=True):
         if alias:
-            result = result.replace(alias, "対象地域")
-    result = re.sub(r"対象地域(?:県|府|都|道)", "対象地域", result)
+            result = result.replace(alias, "完全在宅")
+    result = re.sub(r"完全在宅(?:県|府|都|道)", "完全在宅", result)
     return result
 
 
@@ -1075,9 +1075,11 @@ def sanitize_image_template_prompt(text: str) -> str:
         lowered = line.lower()
         if "banana" in lowered or "gafoo source reference" in lowered:
             continue
-        line = line.replace("{{region}}", "地名なし")
-        line = re.sub(r"\bRegion\b\s*[:：]?\s*「?地名なし」?", "Location text: do not include", line, flags=re.IGNORECASE)
-        line = re.sub(r"地域[:：]?\s*「?地名なし」?", "地名表記なし", line)
+        line = re.sub(r"\bRegion\b\s*[:：]?\s*「?地名なし」?", "Location text: {{region}}", line, flags=re.IGNORECASE)
+        line = re.sub(r"地域[:：]?\s*「?地名なし」?", "地域: {{region}}", line)
+        line = line.replace("地名なし", "{{region}}")
+        line = line.replace("地域なし", "{{region}}")
+        line = line.replace("住所なし", "{{region}}")
         cleaned_lines.append(line)
     return "\n".join(cleaned_lines).strip()
 
@@ -1093,12 +1095,17 @@ def build_banner_prompt(
     prompt_template_name: str = "",
 ) -> str:
     post_text = strip_markdown_markers(post_text)
-    prompt_post_text = remove_region_names_for_image_prompt(post_text, region)
-    location_note = "画像生成プロンプトと画像内テキストには、都道府県名・市区町村名・駅名などの地名を入れない。"
+    region_text = normalize_prefecture(region) or clean_display_text(region)
+    is_factory = task_type == "factory"
+    prompt_post_text = post_text if is_factory else remove_region_names_for_image_prompt(post_text, region)
+    if is_factory:
+        location_note = f"工場案件の画像内テキストには、投稿文に掲載されている県名「{region_text or '投稿文の県名'}」を必ず入れる。地名がないことを示す文言は使わない。"
+    else:
+        location_note = "在宅案件の画像内テキストには、都道府県名・市区町村名・駅名などを入れない。地名がないことを示す文言も使わない。"
     template_values = {
         "account_name": account_name,
         "task_type": public_task_label(task_type),
-        "region": "地名なし",
+        "region": region_text if is_factory else "完全在宅",
         "salary_text": salary_text,
         "role_phrase": role_phrase,
         "post_text": prompt_post_text.strip(),
@@ -1107,7 +1114,8 @@ def build_banner_prompt(
     if prompt_template:
         rendered = render_prompt_template(sanitize_image_template_prompt(prompt_template), template_values)
         source = f"テンプレート: {prompt_template_name}\n\n" if prompt_template_name else ""
-        return f"{source}{rendered.strip()}\n\n{location_note}\n\n地名を伏せた投稿文:\n{prompt_post_text.strip()}"
+        post_heading = "投稿文:" if is_factory else "在宅条件として整えた投稿文:"
+        return f"{source}{rendered.strip()}\n\n{location_note}\n\n{post_heading}\n{prompt_post_text.strip()}"
 
     common = [
         "あなたは求人広告バナーを作るデザイナーです。",
@@ -1121,6 +1129,7 @@ def build_banner_prompt(
         specific = [
             "カテゴリ: 工場求人",
             location_note,
+            f"勤務地表記: {region_text or '投稿文の県名'}",
             f"職種表記: {role_phrase}",
             f"給与表記: {salary_text}",
             "工場・製造の仕事だとひと目でわかるビジュアル。",
@@ -1136,7 +1145,8 @@ def build_banner_prompt(
             "ノートPC、在宅ワーク、チャット、オンライン業務の雰囲気を反映する。",
         ]
     body = "\n".join(common + specific)
-    return f"{body}\n\nアカウント名: {account_name}\n\n地名を伏せた投稿文:\n{prompt_post_text.strip()}"
+    post_heading = "投稿文:" if is_factory else "在宅条件として整えた投稿文:"
+    return f"{body}\n\nアカウント名: {account_name}\n\n{post_heading}\n{prompt_post_text.strip()}"
 
 
 def extract_salary_text(source_text: str, task_kind: str) -> str:
