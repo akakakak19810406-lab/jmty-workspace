@@ -1037,6 +1037,41 @@ def choose_prompt_template(templates_dir: Path, task_type: str, account_no: str,
     return random.SystemRandom().choice(templates)
 
 
+def clean_template_stem(template_name: str) -> str:
+    clean_name = Path(str(template_name or "").strip()).name
+    suffix = Path(clean_name).suffix.lower()
+    if suffix in {".md", ".txt", *IMAGE_EXTENSIONS}:
+        return clean_name[: -len(suffix)]
+    return clean_name
+
+
+def template_preview_path(templates_dir: Path, template_name: str) -> Path | None:
+    clean_name = clean_template_stem(template_name)
+    if not clean_name:
+        return None
+    preview_dir = templates_dir / "_previews"
+    for ext in sorted(IMAGE_EXTENSIONS):
+        candidate = preview_dir / f"{clean_name}{ext}"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def style_reference_block(templates_dir: Path, template_name: str) -> str:
+    preview_path = template_preview_path(templates_dir, template_name)
+    if not preview_path:
+        return ""
+    return "\n".join(
+        [
+            "選択された画風テンプレ見本画像:",
+            f"- パス: {preview_path}",
+            "- このアップロード済み/保存済み見本画像を、色・文字組み・密度・質感・雰囲気の画風ガイドとして確認して使う。",
+            "- 見本画像は画風だけを参考にし、人物・小物・作業内容・画像内の職種表記は投稿文の職種に合わせる。",
+            "- ロゴ、人物、ブランド記号、QRコード、既存テキストをそのままコピーしない。",
+        ]
+    )
+
+
 def render_prompt_template(template_text: str, values: dict[str, str]) -> str:
     rendered = template_text
     for key, value in values.items():
@@ -1093,6 +1128,7 @@ def build_banner_prompt(
     role_phrase: str,
     prompt_template: str = "",
     prompt_template_name: str = "",
+    prompt_templates_dir: Path = DEFAULT_PROMPT_TEMPLATES_DIR,
 ) -> str:
     post_text = strip_markdown_markers(post_text)
     region_text = normalize_prefecture(region) or clean_display_text(region)
@@ -1114,8 +1150,23 @@ def build_banner_prompt(
     if prompt_template:
         rendered = render_prompt_template(sanitize_image_template_prompt(prompt_template), template_values)
         source = f"テンプレート: {prompt_template_name}\n\n" if prompt_template_name else ""
+        style_reference = style_reference_block(prompt_templates_dir, prompt_template_name)
         post_heading = "投稿文:" if is_factory else "在宅条件として整えた投稿文:"
-        return f"{source}{rendered.strip()}\n\n{location_note}\n\n{post_heading}\n{prompt_post_text.strip()}"
+        parts = [source + rendered.strip()]
+        if style_reference:
+            parts.append(style_reference)
+        parts.append(
+            "\n".join(
+                [
+                    "職種に合わせる優先ルール:",
+                    f"- 画像の作業シーン、人物、小物、短い職種コピーは投稿文の職種「{role_phrase}」に合わせる。",
+                    "- 画風テンプレは色・文字組み・密度・質感・雰囲気だけを参考にする。",
+                    "- テンプレ見本の元の職業や小物が投稿文と違う場合は、投稿文の職種を優先して置き換える。",
+                ]
+            )
+        )
+        parts.extend([location_note, f"{post_heading}\n{prompt_post_text.strip()}"])
+        return "\n\n".join(part for part in parts if part.strip())
 
     common = [
         "あなたは求人広告バナーを作るデザイナーです。",
@@ -2164,6 +2215,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                         extract_role_phrase(factory_case_source, "factory"),
                         factory_template,
                         factory_template_name,
+                        prompt_templates_dir,
                     ),
                     prompt_template_name=factory_template_name,
                     prompt_template=factory_template,
@@ -2202,6 +2254,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                         extract_role_phrase(remote1_source_post, "remote1"),
                         remote1_template,
                         remote1_template_name,
+                        prompt_templates_dir,
                     ),
                     prompt_template_name=remote1_template_name,
                     prompt_template=remote1_template,
@@ -2240,6 +2293,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                         extract_role_phrase(remote2_source_post, "remote2"),
                         remote2_template,
                         remote2_template_name,
+                        prompt_templates_dir,
                     ),
                     prompt_template_name=remote2_template_name,
                     prompt_template=remote2_template,
@@ -2287,6 +2341,7 @@ def write_prepare_output(output_root: Path, tasks: list[Task]) -> None:
                     task.salary_text, extract_role_phrase(existing_text, task.kind),
                     task.prompt_template,
                     task.prompt_template_name,
+                    prompt_templates_dir,
                 )
             else:
                 post_path.write_text(task.post_text, encoding="utf-8")
