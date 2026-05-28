@@ -93,7 +93,7 @@ python3 scripts/jmty_gui.py --port 8790 --open
 
 画像検証は複数件を並列で確認します。並列数は `JMTY_IMAGE_VALIDATION_CONCURRENCY` で変更できます。
 投稿文一括AI再作成はアカウント単位で並列実行し、全件の生成・検証が通ってからローカル投稿文ファイルへまとめて保存します。並列数は `JMTY_POST_GENERATION_ACCOUNT_PARALLELISM` で変更でき、初期値は `2` です。
-週次一括実行の画像生成はアカウント単位で並列実行します。並列数は `JMTY_WEEKLY_ACCOUNT_PARALLELISM` で変更でき、初期値は `2` です。
+週次一括実行の画像生成はアカウント単位で並列実行します。並列数は `JMTY_WEEKLY_ACCOUNT_PARALLELISM` で変更でき、初期値は `6` です。
 週次一括の並列画像生成中は、別枠の生成画像を誤って拾わないように、`~/.codex/generated_images` から最新画像を拾うフォールバックを使いません。
 Drive反映は `outputs/jmty-weekly/current/drive_sync_manifest.json` のハッシュを使い、未変更ファイルの削除・再アップロードを避けます。`--purge-account-images` 実行時の画像だけは、削除後に必ずアップロードします。
 

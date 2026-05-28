@@ -276,6 +276,18 @@ def classify_failure(exc: BaseException) -> tuple[str, list[str], list[str]]:
                 "安全な書き込み先の候補を改善レポートに残す",
             ],
         )
+    if isinstance(exc, NameError) and "normalized_condition_text" in message:
+        return (
+            "validate-sheet-posts 修復処理の関数名エラー",
+            [
+                "`validate-sheet-posts --repair` の比較処理で定義済みの `normalize_condition_text` を使う",
+                "修復処理でだけ通る分岐は `--repair` 付きで構文と名前解決を確認する",
+            ],
+            [
+                "`normalized_condition_text` の未定義エラーを既知エラーとして分類",
+                "再発時に修正対象の関数名と実行コマンドを改善レポートへ残す",
+            ],
+        )
     return (
         "未分類エラー",
         [
@@ -509,6 +521,33 @@ def find_drive_file_by_name(parent_id: str, name: str) -> dict | None:
     )
     files = res.get("files", [])
     return files[0] if files else None
+
+
+def drive_file_available(file_id: str, expected_name: str = "") -> bool:
+    try:
+        res = run_gws(
+            [
+                "drive",
+                "files",
+                "get",
+                "--params",
+                json.dumps(
+                    {
+                        "fileId": file_id,
+                        "fields": "id,name,mimeType,trashed",
+                        "supportsAllDrives": True,
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+    except JmtyWeeklyAssetsError:
+        return False
+    if res.get("trashed"):
+        return False
+    if expected_name and str(res.get("name") or "") != expected_name:
+        return False
+    return bool(res.get("id"))
 
 
 def list_drive_child_files(parent_id: str) -> list[dict]:
@@ -1629,7 +1668,7 @@ def validate_sheet_posts(output_root: Path, repair: bool, include_drive_ocr: boo
                 continue
             repaired_post = build_repaired_sheet_post(task, finding["image_conditions"], finding["current_post"])
             current_value = strip_markdown_markers(str(finding.get("current_post") or ""))
-            if normalized_condition_text(repaired_post) == normalized_condition_text(current_value):
+            if normalize_condition_text(repaired_post) == normalize_condition_text(current_value):
                 continue
             range_name = f"{SHEET_NAME}!{finding['cell']}"
             updates.append({"range": range_name, "values": [[repaired_post]]})
@@ -2511,25 +2550,30 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
 
 def resolve_drive_image_file_id(task: dict, manifest: dict, folder_ids: dict[str, str]) -> tuple[str, str]:
     item = manifest.get("items", {}).get(drive_manifest_key(task), {}) if isinstance(manifest.get("items"), dict) else {}
+    expected_name = Path(task["image_relpath"]).name
     if isinstance(item, dict):
         manifest_file_id = str(item.get("image_file_id") or "").strip()
         manifest_image_name = str(item.get("image_name") or "").strip()
-        expected_name = Path(task["image_relpath"]).name
         if manifest_file_id and (not manifest_image_name or manifest_image_name == expected_name):
-            return manifest_file_id, "manifest"
+            if drive_file_available(manifest_file_id, expected_name):
+                return manifest_file_id, "manifest"
 
     account_name = task["account_name"]
-    folder_id = str(item.get("folder_id") or "") if isinstance(item, dict) else ""
-    if not folder_id:
-        folder_id = folder_ids.get(account_name, "")
-    if not folder_id:
+    folder_candidates = []
+    for candidate in [
+        str(item.get("folder_id") or "") if isinstance(item, dict) else "",
+        folder_ids.get(account_name, ""),
+    ]:
+        if candidate and candidate not in folder_candidates:
+            folder_candidates.append(candidate)
+    if not folder_candidates:
         return "", "folder_missing"
 
-    image_name = Path(task["image_relpath"]).name
-    drive_file = find_drive_file_by_name(folder_id, image_name)
-    if not drive_file:
-        return "", "image_missing"
-    return str(drive_file["id"]), "drive_search"
+    for folder_id in folder_candidates:
+        drive_file = find_drive_file_by_name(folder_id, expected_name)
+        if drive_file:
+            return str(drive_file["id"]), "drive_search"
+    return "", "image_missing"
 
 
 def sync_sheet(output_root: Path) -> None:
