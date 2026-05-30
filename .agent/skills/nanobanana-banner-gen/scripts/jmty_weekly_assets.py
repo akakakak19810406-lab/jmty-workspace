@@ -1062,8 +1062,9 @@ def style_reference_block(templates_dir: Path, template_name: str) -> str:
     return "\n".join(
         [
             "選択された画風テンプレ見本画像:",
-            f"- パス: {preview_path}",
+            f"Style reference image path: {preview_path}",
             "- このアップロード済み/保存済み見本画像を、色・文字組み・密度・質感・雰囲気の画風ガイドとして確認して使う。",
+            "- 生成前にこのローカル画像ファイルを直接確認し、テンプレ名だけで生成しない。",
             "- 見本画像は画風だけを参考にし、人物・小物・作業内容・画像内の職種表記は投稿文の職種に合わせる。",
             "- ロゴ、人物、ブランド記号、QRコード、既存テキストをそのままコピーしない。",
         ]

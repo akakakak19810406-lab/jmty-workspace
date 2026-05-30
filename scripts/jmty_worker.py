@@ -342,7 +342,7 @@ def image_source_info(prompt_text: str, template_name: str) -> dict[str, Any]:
     sources: list[str] = []
     reference_path: Path | None = None
     patterns = (
-        re.compile(r"^\s*(?:[-*]\s*)?(reference image path|source reference|gafoo source reference|参考画像)\s*[:：]\s*(.+?)\s*$", re.I),
+        re.compile(r"^\s*(?:[-*]\s*)?(style reference image path|template reference image path|template preview image path|reference image path|source reference|gafoo source reference|参考画像)\s*[:：]\s*(.+?)\s*$", re.I),
         re.compile(r"^\s*(?:[-*]\s*)?(source)\s*[:：]\s*(.+?)\s*$", re.I),
     )
 

@@ -5820,7 +5820,7 @@ def template_allowed_kinds(kind: str) -> list[str]:
 
 DISALLOWED_IMAGE_TEMPLATE_PATTERN = re.compile(
     r"svg|vector|ベクター|flat illustration|memphis|minimal line|line art|blueprint|schematic|"
-    r"cyanotype|doodle|notebook|neumorphism|geometric|図形|線画|アイコン主体|テンプレ風",
+    r"cyanotype|doodle|notebook|neumorphism|geometric-only|geometric template|図形だけ|線画だけ|アイコン主体|テンプレ風",
     flags=re.IGNORECASE,
 )
 
@@ -5830,11 +5830,16 @@ def template_is_disallowed_for_image_generation(template: dict[str, Any]) -> boo
     if name.startswith("common_gafoo_"):
         return True
     text = str(template.get("text") or "")
-    positive_direction = re.split(r"\n\s*Avoid\s*:", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    positive_direction = re.split(
+        r"\n\s*(?:Strict\s+avoid(?:\s+rules)?|Avoid|Strict\s+prohibition|禁止事項|必須禁止事項)\s*[:：]",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
     positive_direction = "\n".join(
         line
         for line in positive_direction.splitlines()
-        if not re.search(r"\bdo not\b|avoid|禁止|使わない|避け", line, flags=re.IGNORECASE)
+        if not re.search(r"\bdo not\b|avoid|must not|not look like|not become|禁止|使わない|避け", line, flags=re.IGNORECASE)
     )
     haystack = f"{name}\n{positive_direction}"
     return bool(DISALLOWED_IMAGE_TEMPLATE_PATTERN.search(haystack))
@@ -5907,7 +5912,7 @@ def image_source_info(prompt_text: str, template_name: str, templates_dir: Path 
     sources: list[str] = []
     reference_path: Path | None = None
     patterns = (
-        re.compile(r"^\s*(?:[-*]\s*)?(reference image path|source reference|gafoo source reference|参考画像)\s*[:：]\s*(.+?)\s*$", re.I),
+        re.compile(r"^\s*(?:[-*]\s*)?(style reference image path|template reference image path|template preview image path|reference image path|source reference|gafoo source reference|参考画像)\s*[:：]\s*(.+?)\s*$", re.I),
         re.compile(r"^\s*(?:[-*]\s*)?(source)\s*[:：]\s*(.+?)\s*$", re.I),
     )
 
@@ -6038,8 +6043,9 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
         reference_text = "\n".join(
             [
                 "Selected style reference image:",
-                f"- Path: {reference_path}",
+                f"Style reference image path: {reference_path}",
                 "- Use this uploaded/template preview image as the visual style guide for color, typography, layout density, texture, and mood.",
+                "- Before generating, inspect this local image file directly. Do not rely on the template name alone.",
                 "- The reference image controls style only. The actual job scene, person, props, and in-image job wording must match the role extracted from the job post.",
                 "- Do not copy any logos, people, brand marks, QR codes, or exact text from the reference image.",
             ]
@@ -6109,7 +6115,7 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
             "You are being called by a local JMTY GUI to generate one image.",
             "The user already approved this automated weekly GUI run in the parent session. Do not ask for additional confirmation; generate and save the requested file immediately.",
             "Use Codex's built-in image generation capability from the user's logged-in Codex subscription. Do not use OPENAI_API_KEY or external custom scripts.",
-            "If IMAGE PROMPT contains a selected style reference image path, inspect that local image before generation and use it as the visual style guide.",
+            "If IMAGE PROMPT contains `Style reference image path:`, inspect that local image before generation and use it as the visual style guide.",
             "Generate exactly one square recruitment banner image from the prompt below. Output must be a raster PNG image.",
             "Do not use SVG, HTML, XML, vector drawing, programmatic shapes, icon packs, or flat illustration as the image construction method or visual style.",
             f"Save the final image to this exact workspace path: {image_path}",
