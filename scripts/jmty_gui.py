@@ -4410,7 +4410,8 @@ def build_post_generation_prompt(
             "- CTAとして【公式LINEURL】を本文の応募導線に自然に入れ、投稿文を途中で切らず最後の行まで完結させる。",
             "- 最後の行を読点、コロン、開き括弧、短すぎる断片で終わらせない。",
             "- 給与、勤務条件、工場/在宅の種別は、validation 指摘の矛盾解消に必要な場合を除き、現在の投稿文・シート情報・案件素材から勝手に変えない。",
-            "- 工場投稿は現在の地域を守る。在宅投稿は地域名を使わず、完全在宅の募集として書く。",
+            "- 地域はスプレッドシートの値を正本にする。工場投稿はH列の地域を必ず使い、現在の投稿文に別地域が残っていてもH列の地域へ置き換える。",
+            "- 在宅投稿はQ列の地域を内部管理だけに使い、投稿文には地域名を出さず、完全在宅の募集として書く。",
             "- 工場投稿は工場求人として書き、完全在宅や出勤不要など在宅求人に見える表現を入れない。",
             "- 在宅投稿は完全在宅求人として書き、「完全在宅」と「未経験OK」を必ず入れる。",
             "- 在宅投稿には、都道府県名・市区町村名・駅名などの地名を入れない。勤務地に触れる場合は完全在宅の一般表現だけで書く。",
@@ -4508,6 +4509,15 @@ def post_validation_issues(target: dict[str, Any], text: str) -> list[str]:
     kind = normalize_kind(str(target.get("kind") or ""))
     if kind == "factory" and "完全在宅" in cleaned:
         issues.append(prefix + "工場投稿文に完全在宅の表記があります")
+    if kind == "factory":
+        region = str(target.get("region") or "").strip()
+        expected_region = canonical_prefecture(region)
+        found_regions = set(detected_prefectures(cleaned))
+        conflicting_regions = sorted(found_regions - ({expected_region} if expected_region else set()))
+        if expected_region and expected_region not in found_regions:
+            issues.append(prefix + f"工場投稿文にH列の地域「{expected_region}」がありません")
+        if conflicting_regions:
+            issues.append(prefix + "工場投稿文にH列と違う地域が含まれています: " + "、".join(conflicting_regions))
     if kind != "factory":
         if "完全在宅" not in cleaned:
             issues.append(prefix + "在宅投稿文に完全在宅の表記がありません")
@@ -6811,7 +6821,7 @@ def start_codex_image_generation(output_root: Path, templates_dir: Path, payload
 
 
 WEEKLY_BULK_STEPS = [
-    {"key": "rotate", "label": "地域ローテーション反映", "start": 2, "end": 14},
+    {"key": "rotate", "label": "地域ランダム割当反映", "start": 2, "end": 14},
     {"key": "posts", "label": "投稿文一括AI再作成", "start": 14, "end": 42},
     {"key": "images", "label": "画像全員分生成", "start": 42, "end": 82},
     {"key": "drive", "label": "Drive反映", "start": 82, "end": 90},
@@ -7442,7 +7452,7 @@ def run_weekly_bulk_job(job_id: str, output_root: Path, templates_dir: Path, *, 
             raise RuntimeError(f"GWS認証が必要です: {auth.get('label') or auth.get('detail') or '未認証'}")
 
         if resume:
-            append_job_output(job_id, f"\n[{display_time()}] 途中から再実行: 地域ローテーション反映をスキップ\n")
+            append_job_output(job_id, f"\n[{display_time()}] 途中から再実行: 地域ランダム割当反映をスキップ\n")
             finish_weekly_bulk_step(job_id, 0, "スキップ")
         else:
             run_weekly_bulk_command_step(job_id, 0, "rotate-sheet", output_root, templates_dir, {})
@@ -13263,7 +13273,7 @@ INDEX_HTML = r"""<!doctype html>
       <nav class="top-view-tabs" aria-label="上位タブ">
         <button class="view-tab" data-view="dashboard" data-icon="dashboard" aria-selected="true">ダッシュボード</button>
         <button class="view-tab" data-view="posts" data-icon="article" aria-selected="false">投稿文管理</button>
-        <button class="view-tab" data-view="rotation" data-icon="sync_alt" aria-selected="false">地域・ローテーション</button>
+        <button class="view-tab" data-view="rotation" data-icon="sync_alt" aria-selected="false">地域・ランダム割当</button>
         <button class="view-tab" data-view="images" data-icon="image" aria-selected="false">画像生成</button>
         <button class="view-tab" data-view="prompts" data-icon="palette" aria-selected="false">画像プロンプト管理</button>
         <button class="view-tab" data-view="logs" data-icon="terminal" aria-selected="false">実行ログ</button>
@@ -13279,7 +13289,7 @@ INDEX_HTML = r"""<!doctype html>
       <nav class="view-nav" aria-label="画面切り替え">
         <button class="view-tab" data-view="dashboard" data-icon="dashboard" aria-selected="true">ダッシュボード</button>
         <button class="view-tab" data-view="posts" data-icon="article" aria-selected="false">投稿文管理</button>
-        <button class="view-tab" data-view="rotation" data-icon="sync_alt" aria-selected="false">地域・ローテーション</button>
+        <button class="view-tab" data-view="rotation" data-icon="sync_alt" aria-selected="false">地域・ランダム割当</button>
         <button class="view-tab" data-view="images" data-icon="image" aria-selected="false">画像生成</button>
         <button class="view-tab" data-view="prompts" data-icon="palette" aria-selected="false">画像プロンプト管理</button>
         <button class="view-tab" data-view="logs" data-icon="terminal" aria-selected="false">実行ログ</button>
@@ -13313,7 +13323,7 @@ INDEX_HTML = r"""<!doctype html>
 	                  <span class="dashboard-section-icon" aria-hidden="true">route</span>
 	                  <strong>週次一括実行の全体進捗</strong>
 	                </div>
-	                <span>ローテーション、投稿文、画像、Drive、スプレッドシート反映までの進み具合です。</span>
+	                <span>地域ランダム割当、投稿文、画像、Drive、スプレッドシート反映までの進み具合です。</span>
 	              </div>
 	              <div class="dashboard-section-actions">
 	                <button class="danger" data-command="weekly-bulk" data-icon="play_arrow">週次一括実行</button>
@@ -13411,10 +13421,10 @@ INDEX_HTML = r"""<!doctype html>
       <section class="view-panel" data-view-panel="rotation">
         <section class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">地域・ローテーション</h2>
+            <h2 class="panel-title">地域・ランダム割当</h2>
             <div class="panel-actions">
-              <button data-command="rotate-dry-run" data-icon="preview">ローテーション確認</button>
-              <button class="warn" data-command="rotate-sheet" data-icon="sync">ローテーションをシートに反映</button>
+              <button data-command="rotate-dry-run" data-icon="preview">ランダム割当確認</button>
+              <button class="warn" data-command="rotate-sheet" data-icon="sync">ランダム割当をシートに反映</button>
               <button id="open-basic-settings" data-icon="settings">基本情報設定</button>
             </div>
           </div>
@@ -14035,11 +14045,11 @@ INDEX_HTML = r"""<!doctype html>
     };
     const commandLabels = {
       prepare: "投稿文を再作成",
-      "rotate-dry-run": "ローテーション確認",
-      "rotate-sheet": "ローテーションをシートに反映",
+      "rotate-dry-run": "ランダム割当確認",
+      "rotate-sheet": "ランダム割当をシートに反映",
       "weekly-bulk": "週次一括実行",
       "weekly-bulk-resume": "途中から再実行",
-      "weekly-phase-rotate": "地域ローテーションだけ実行",
+      "weekly-phase-rotate": "地域ランダム割当だけ実行",
       "weekly-phase-posts": "投稿文AI再作成だけ実行",
       "weekly-phase-images": "画像全員分生成だけ実行",
       "weekly-phase-drive": "Drive反映だけ実行",
@@ -14064,10 +14074,10 @@ INDEX_HTML = r"""<!doctype html>
       "task-board-codex": "Task Board改善実行",
     };
     const commandConfirmations = {
-      "rotate-sheet": "ローテーション結果をスプレッドシートに反映します。Google Sheets の地域割り振りを1つずつずらします。続行しますか？",
-      "weekly-bulk": "週次一括実行を開始します。地域と投稿文のローテーション反映、投稿文AI再作成、全員分の画像生成、Drive反映、スプレッドシート反映、投稿文整合性検証を順番に実行します。長時間かかります。続行しますか？",
-      "weekly-bulk-resume": "途中から再実行します。地域ローテーションと投稿文再作成はスキップし、生成済み画像を飛ばして未生成画像、Drive反映、スプレッドシート反映、投稿文整合性検証を実行します。続行しますか？",
-      "weekly-phase-rotate": "地域ローテーションだけを実行します。Google Sheets の地域割り振りを1つずつずらします。続行しますか？",
+      "rotate-sheet": "地域のランダム割当結果をスプレッドシートに反映します。Google Sheets のH列/Q列地域と対応投稿文をランダムに入れ替えます。続行しますか？",
+      "weekly-bulk": "週次一括実行を開始します。地域ランダム割当反映、投稿文AI再作成、全員分の画像生成、Drive反映、スプレッドシート反映、投稿文整合性検証を順番に実行します。長時間かかります。続行しますか？",
+      "weekly-bulk-resume": "途中から再実行します。地域ランダム割当と投稿文再作成はスキップし、生成済み画像を飛ばして未生成画像、Drive反映、スプレッドシート反映、投稿文整合性検証を実行します。続行しますか？",
+      "weekly-phase-rotate": "地域ランダム割当だけを実行します。Google Sheets のH列/Q列地域と対応投稿文をランダムに入れ替えます。続行しますか？",
       "weekly-phase-posts": "投稿文AI再作成だけを実行します。全アカウントの投稿文ファイルを生成結果で更新します。続行しますか？",
       "weekly-phase-images": "画像全員分生成だけを実行します。既存画像も含めて対象投稿の画像生成を実行します。続行しますか？",
       "weekly-phase-drive": "Drive反映だけを実行します。Google Drive のアカウント別フォルダへ画像・投稿文・プロンプトを送ります。続行しますか？",
@@ -14079,7 +14089,7 @@ INDEX_HTML = r"""<!doctype html>
       "validate-sheet-posts": "スプレッドシートの画像条件と投稿文を照合します。通常実行は修正対象一覧のみを出します。続行しますか？",
     };
     const weeklyBulkSteps = [
-      { key: "rotate", label: "地域ローテーション", command: "weekly-phase-rotate" },
+      { key: "rotate", label: "地域ランダム割当", command: "weekly-phase-rotate" },
       { key: "posts", label: "投稿文AI再作成", command: "weekly-phase-posts" },
       { key: "images", label: "画像全員分生成", command: "weekly-phase-images" },
       { key: "drive", label: "Drive反映", command: "weekly-phase-drive" },
@@ -15739,7 +15749,7 @@ INDEX_HTML = r"""<!doctype html>
       const text = (data.rotation_report || "").trim();
       if (!text) {
         root.className = "rotation-report rotation-report-empty";
-        root.textContent = "ローテーション確認やスプレッドシート反映の結果がある場合、ここに rotation_report.md の内容を表示します。";
+        root.textContent = "ランダム割当確認やスプレッドシート反映の結果がある場合、ここに rotation_report.md の内容を表示します。";
         return;
       }
 
@@ -15759,9 +15769,9 @@ INDEX_HTML = r"""<!doctype html>
         <div class="rotation-report-head">
           <div class="rotation-report-title">
             <span class="rotation-report-kicker">rotation_report.md</span>
-            <strong>ローテーション後の担当地域</strong>
+            <strong>ランダム割当後の担当地域</strong>
           </div>
-          <div class="rotation-report-stats" aria-label="ローテーション件数">
+          <div class="rotation-report-stats" aria-label="ランダム割当件数">
             <span class="pill ok">工場 ${factoryCount}件</span>
             <span class="pill ok">在宅1 ${remote1Count}件</span>
             <span class="pill ok">在宅2 ${remote2Count}件</span>
@@ -15791,7 +15801,7 @@ INDEX_HTML = r"""<!doctype html>
           </table>
         </div>
         <div class="rotation-report-foot">
-          <span>この表はローテーション確認ログを見やすく整形した表示です。</span>
+          <span>この表はランダム割当確認ログを見やすく整形した表示です。</span>
           <details class="rotation-report-raw">
             <summary>元のログを表示</summary>
             <pre class="rotation-raw-code">${esc(text)}</pre>

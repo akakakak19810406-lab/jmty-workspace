@@ -768,18 +768,26 @@ def rotate_bundles(rows: list[list[str]], target_indexes: list[int], column_inde
     if len(target_indexes) <= 1:
         return old_bundles
 
-    rotated: dict[int, list[str]] = {}
-    for pos, row_idx in enumerate(target_indexes):
-        source_idx = target_indexes[pos - 1]
-        rotated[row_idx] = old_bundles[source_idx]
-    return rotated
+    shuffled_source_indexes = list(target_indexes)
+    rng = random.SystemRandom()
+    for _ in range(20):
+        rng.shuffle(shuffled_source_indexes)
+        if any(row_idx != source_idx for row_idx, source_idx in zip(target_indexes, shuffled_source_indexes)):
+            break
+    else:
+        shuffled_source_indexes = target_indexes[-1:] + target_indexes[:-1]
+
+    return {
+        row_idx: old_bundles[source_idx]
+        for row_idx, source_idx in zip(target_indexes, shuffled_source_indexes)
+    }
 
 
 def render_rotation_report(rows: list[list[str]], factory_rows: list[int], remote_rows: list[int]) -> str:
     lines = [
-        "【地域ローテーション確認】",
+        "【地域ランダム割当確認】",
         "■ 工場（H列）",
-        "| アカウント名 | 担当エリア（ローテーション後） |",
+        "| アカウント名 | 担当エリア（ランダム割当後） |",
         "|------------|---------------------------|",
     ]
     for row_idx in factory_rows:
@@ -791,7 +799,7 @@ def render_rotation_report(rows: list[list[str]], factory_rows: list[int], remot
         [
             "",
             "■ 在宅1（Q列1行目）",
-            "| アカウント名 | 担当エリア（ローテーション後） |",
+            "| アカウント名 | 担当エリア（ランダム割当後） |",
             "|------------|---------------------------|",
         ]
     )
@@ -805,7 +813,7 @@ def render_rotation_report(rows: list[list[str]], factory_rows: list[int], remot
         [
             "",
             "■ 在宅2（Q列2行目）",
-            "| アカウント名 | 担当エリア（ローテーション後） |",
+            "| アカウント名 | 担当エリア（ランダム割当後） |",
             "|------------|---------------------------|",
         ]
     )
@@ -1078,6 +1086,14 @@ PREFECTURE_NAMES_FOR_IMAGE_REDACTION = (
     "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
     "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
 )
+
+
+def detected_prefecture_names(text: str) -> list[str]:
+    found: list[str] = []
+    for prefecture in PREFECTURE_NAMES_FOR_IMAGE_REDACTION:
+        if prefecture in str(text or "") and prefecture not in found:
+            found.append(prefecture)
+    return found
 
 
 def remove_region_names_for_image_prompt(text: str, region: str = "") -> str:
@@ -1815,6 +1831,17 @@ def validate_post_text(task: dict, post_text: str) -> None:
         raise RuntimeError(f"投稿文にMarkdown装飾記号が残っています: {task['account_name']} / {task['label_ja']}")
     if task["kind"] == "factory" and "完全在宅" in post_text:
         raise RuntimeError(f"工場投稿文に在宅系の文言があります: {task['account_name']} / {task['label_ja']}")
+    if task["kind"] == "factory":
+        expected_region = normalize_prefecture(str(task.get("region") or ""))
+        found_regions = detected_prefecture_names(post_text)
+        conflicting_regions = [region for region in found_regions if region != expected_region]
+        if expected_region and expected_region not in post_text:
+            raise RuntimeError(f"工場投稿文にH列の地域がありません: {task['account_name']} / {task['label_ja']} / {expected_region}")
+        if conflicting_regions:
+            raise RuntimeError(
+                f"工場投稿文にH列と違う地域が含まれています: {task['account_name']} / {task['label_ja']} / "
+                + "、".join(conflicting_regions)
+            )
     if task["kind"] in {"remote1", "remote2"} and "完全在宅" not in post_text:
         raise RuntimeError(f"在宅投稿文に完全在宅の表記がありません: {task['account_name']} / {task['label_ja']}")
     if task["kind"] in {"remote1", "remote2"} and remote_post_has_region_name(post_text, str(task.get("region") or "")):
