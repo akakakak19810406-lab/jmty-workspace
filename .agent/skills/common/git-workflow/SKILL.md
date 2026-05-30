@@ -61,16 +61,19 @@ git -C "$JMTY_ROOT" config jmty.lfsReservedBytes <バイト数>
 ## Discord 報告（任意）
 - `/git` の push / プルリクエスト完了後は、ユーザーに Discord 報告を送るか確認する。送ると決まった場合だけ Discord へ報告する。Webhook が未設定の場合のみスキップしてよい。
 - `/git-nd` の push / プルリクエスト完了後は、Discord 報告を送らない。
-- チームで同じ Webhook を使うときは、`config/discord-git-webhook.json` を Git 共有の正本にしてよい。
-- 読み取り順は `--webhook-url` → 環境変数 → `config/discord-git-webhook.json` → ローカル設定 の順にする。
+- Webhook は `config/discord-git-webhook.json` に保存する。秘密ファイルなので Git には含めない。
+- `config/discord-git-webhook.json` には `JMTY_DISCORD_GIT_WEBHOOK_URL` という変数名で保存する。
+- 読み取り順は `--webhook-url` → 環境変数 → `config/discord-git-webhook.json` からプロセス内環境変数へ読込 → ローカル設定 の順にする。
+- URLをコマンド履歴に残さないため、設定時は標準入力から渡す。
 
 ```bash
-python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-shared-set --url "<Discord Webhook URL>"
+read -s JMTY_DISCORD_GIT_WEBHOOK_URL
+printf '%s\n' "$JMTY_DISCORD_GIT_WEBHOOK_URL" | python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-json-set
+unset JMTY_DISCORD_GIT_WEBHOOK_URL
 python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-shared-path
-python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-set --url "<Discord Webhook URL>"
 python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-status
 python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-clear
-python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-shared-clear
+python "$JMTY_ROOT/.agent/skills/common/scripts/jmty_runtime.py" discord-git-webhook-json-clear
 ```
 
 - Discord に送る本文は、変更ファイル名を先に出しつつ、「何をしたか」と「何が変わったの？」を分けて、小学生にもわかる短い文へまとめる。

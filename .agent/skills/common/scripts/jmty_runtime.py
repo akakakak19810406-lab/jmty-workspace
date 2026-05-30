@@ -12,6 +12,9 @@ import urllib.request
 from pathlib import Path
 
 from runtime_common import (
+    DISCORD_GIT_WEBHOOK_URL_ENV,
+    DISCORD_JMTY_WEBHOOK_URL_ENV,
+    clear_discord_jmty_webhook_url,
     clear_discord_git_webhook_url,
     clear_shared_discord_git_webhook_url,
     clear_worked_before,
@@ -20,6 +23,7 @@ from runtime_common import (
     detect_shared_root,
     format_bytes_for_humans,
     get_discord_git_webhook_url,
+    get_discord_jmty_webhook_url,
     get_git_lfs_free_plan_status,
     get_shared_discord_git_webhook_path,
     get_worked_before_path,
@@ -31,6 +35,7 @@ from runtime_common import (
     mark_worked_before,
     resolve_input_path,
     save_discord_git_webhook_url,
+    save_discord_jmty_webhook_url,
     save_shared_discord_git_webhook_url,
     save_owner_machine,
     save_repo_root,
@@ -164,6 +169,20 @@ def _mask_secret_url(url: str) -> str:
 def _is_discord_webhook_url(url: str) -> bool:
     normalized = url.strip()
     return any(normalized.startswith(prefix) for prefix in DISCORD_WEBHOOK_HOSTS)
+
+
+def _resolve_webhook_url_arg(url: str | None) -> str:
+    if url is not None:
+        return url.strip()
+
+    stdin_value = sys.stdin.read().strip()
+    if stdin_value:
+        return stdin_value
+
+    raise RuntimeError(
+        "Discord webhook URL が指定されていません。"
+        " --url を使うか、標準入力から渡してください。"
+    )
 
 
 def _run_git(repo_root: Path, *args: str) -> str:
@@ -512,11 +531,18 @@ def main() -> int:
     subparsers.add_parser("discord-git-webhook-shared-path")
     subparsers.add_parser("discord-git-webhook-status")
     discord_webhook_set_parser = subparsers.add_parser("discord-git-webhook-set")
-    discord_webhook_set_parser.add_argument("--url", required=True)
+    discord_webhook_set_parser.add_argument("--url")
     discord_webhook_shared_set_parser = subparsers.add_parser("discord-git-webhook-shared-set")
-    discord_webhook_shared_set_parser.add_argument("--url", required=True)
+    discord_webhook_shared_set_parser.add_argument("--url")
+    discord_webhook_json_set_parser = subparsers.add_parser("discord-git-webhook-json-set")
+    discord_webhook_json_set_parser.add_argument("--url")
     subparsers.add_parser("discord-git-webhook-clear")
     subparsers.add_parser("discord-git-webhook-shared-clear")
+    subparsers.add_parser("discord-git-webhook-json-clear")
+    subparsers.add_parser("discord-jmty-webhook-status")
+    discord_jmty_webhook_json_set_parser = subparsers.add_parser("discord-jmty-webhook-json-set")
+    discord_jmty_webhook_json_set_parser.add_argument("--url")
+    subparsers.add_parser("discord-jmty-webhook-json-clear")
     subparsers.add_parser("install-git-hooks")
 
     git_lfs_status_parser = subparsers.add_parser("git-lfs-free-plan-status")
@@ -650,22 +676,32 @@ def main() -> int:
         if webhook_url is None or source is None:
             print("not-configured")
             return 0
-        print(f"configured:{source}:{_mask_secret_url(webhook_url)}")
+        print(f"configured:{source}:{DISCORD_GIT_WEBHOOK_URL_ENV}:{_mask_secret_url(webhook_url)}")
         return 0
 
     if args.command == "discord-git-webhook-set":
-        if not _is_discord_webhook_url(args.url):
+        try:
+            webhook_url = _resolve_webhook_url_arg(args.url)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if not _is_discord_webhook_url(webhook_url):
             print("Discord webhook URL の形ではありません。", file=sys.stderr)
             return 1
-        saved_path = save_discord_git_webhook_url(args.url)
+        saved_path = save_discord_git_webhook_url(webhook_url)
         print(saved_path)
         return 0
 
-    if args.command == "discord-git-webhook-shared-set":
-        if not _is_discord_webhook_url(args.url):
+    if args.command in {"discord-git-webhook-shared-set", "discord-git-webhook-json-set"}:
+        try:
+            webhook_url = _resolve_webhook_url_arg(args.url)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if not _is_discord_webhook_url(webhook_url):
             print("Discord webhook URL の形ではありません。", file=sys.stderr)
             return 1
-        saved_path = save_shared_discord_git_webhook_url(args.url)
+        saved_path = save_shared_discord_git_webhook_url(webhook_url)
         print(saved_path)
         return 0
 
@@ -674,8 +710,34 @@ def main() -> int:
         print("cleared" if cleared else "not-found")
         return 0
 
-    if args.command == "discord-git-webhook-shared-clear":
+    if args.command in {"discord-git-webhook-shared-clear", "discord-git-webhook-json-clear"}:
         cleared = clear_shared_discord_git_webhook_url()
+        print("cleared" if cleared else "not-found")
+        return 0
+
+    if args.command == "discord-jmty-webhook-status":
+        webhook_url, source = get_discord_jmty_webhook_url()
+        if webhook_url is None or source is None:
+            print("not-configured")
+            return 0
+        print(f"configured:{source}:{DISCORD_JMTY_WEBHOOK_URL_ENV}:{_mask_secret_url(webhook_url)}")
+        return 0
+
+    if args.command == "discord-jmty-webhook-json-set":
+        try:
+            webhook_url = _resolve_webhook_url_arg(args.url)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if not _is_discord_webhook_url(webhook_url):
+            print("Discord webhook URL の形ではありません。", file=sys.stderr)
+            return 1
+        saved_path = save_discord_jmty_webhook_url(webhook_url)
+        print(saved_path)
+        return 0
+
+    if args.command == "discord-jmty-webhook-json-clear":
+        cleared = clear_discord_jmty_webhook_url()
         print("cleared" if cleared else "not-found")
         return 0
 

@@ -42,7 +42,8 @@ ROTATION_REPORT_FILENAME = "rotation_report.md"
 DRIVE_SYNC_MANIFEST_FILENAME = "drive_sync_manifest.json"
 IMAGE_ONLY_DIRNAME = "_drive_images"
 IMPROVEMENT_REPORT_DIRNAME = "_improvement_reports"
-DISCORD_JMTY_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_JMTY_WEBHOOK_URL"
+DISCORD_JMTY_WEBHOOK_URL_ENV = "JMTY_DISCORD_JMTY_WEBHOOK_URL"
+LEGACY_DISCORD_JMTY_WEBHOOK_URL_ENV = "TEAM_INFO_DISCORD_JMTY_WEBHOOK_URL"
 DISCORD_JMTY_WEBHOOK_PATH = Path("config") / "discord-jmty-webhook.json"
 DISCORD_CONTENT_LIMIT = 1900
 OCR_TIMEOUT_SECONDS = int(os.environ.get("JMTY_OCR_TIMEOUT_SECONDS", "45") or "45")
@@ -57,8 +58,6 @@ EXPECTED_IMAGE_FILENAMES = {
 def public_task_label(task_kind: str) -> str:
     return "在宅" if str(task_kind) in {"remote1", "remote2", "remote"} else "工場"
 
-FACTORY_OCR_HINTS = ("工場", "製造", "月収", "寮", "ライン", "高収入")
-REMOTE_OCR_HINTS = ("在宅", "リモート", "自宅", "PC", "文章", "ライター", "オンライン")
 FACTORY_KIND_OCR_HINTS = ("工場", "製造", "寮", "ライン", "組立", "検査", "部品", "軽作業", "倉庫")
 REMOTE_KIND_OCR_HINTS = ("在宅", "リモート", "自宅", "PC", "文章", "ライター", "オンライン", "データ入力", "SNS", "通勤なし")
 SHEET_POST_VALIDATION_MIN_LENGTH = 140
@@ -69,23 +68,6 @@ CTA_VARIANTS = [
     "LINE追加後、そのままボタンをタップ！",
     "LINE登録だけでOK！あとはボタンを押すだけ！",
     "まずはLINE追加！10秒で問い合わせ完了！",
-]
-
-POST_VARIATION_THEMES = [
-    ("安定志向", "長期で落ち着いて続けたい方向けに、安定感と定着しやすさを前面に出す。"),
-    ("高収入志向", "収入目安と生活の立て直しやすさをわかりやすく伝える。"),
-    ("未経験歓迎", "はじめてでも進めやすい手順・研修・サポートを中心に書く。"),
-    ("生活両立", "家庭や自分の時間と両立しやすい働き方を訴求する。"),
-    ("時間帯メリット", "勤務時間・シフト・在宅時間の使いやすさを訴求する。"),
-    ("若手成長", "経験を積みながらできることを増やせる流れを伝える。"),
-    ("再挑戦", "ブランクや転職回数を気にしすぎず相談できる温度感にする。"),
-    ("経験活用", "過去の接客・事務・製造・PC経験などを活かせる見せ方にする。"),
-    ("地域訴求", "投稿地域の人が自分ごとに感じやすい導入にする。"),
-    ("作業明確", "仕事内容を具体的に見せ、不安を減らす。"),
-    ("デスクワーク志向", "落ち着いた作業、入力、確認、文章作成などの進めやすさを訴求する。"),
-    ("スピード相談", "まず条件確認だけでも進められる軽い応募導線にする。"),
-    ("生活支援", "住まい・保険・サポートなど生活面の安心材料を伝える。"),
-    ("柔軟な環境", "相談しやすさ、働き方の調整、続けやすい雰囲気を出す。"),
 ]
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -191,6 +173,11 @@ def get_discord_jmty_webhook_url(repo_root: Path | None = None) -> tuple[str | N
     if env_value and env_value.strip():
         return env_value.strip(), "env"
 
+    legacy_env_value = os.environ.get(LEGACY_DISCORD_JMTY_WEBHOOK_URL_ENV)
+    if legacy_env_value and legacy_env_value.strip():
+        os.environ[DISCORD_JMTY_WEBHOOK_URL_ENV] = legacy_env_value.strip()
+        return legacy_env_value.strip(), "legacy-env"
+
     resolved_root = repo_root or Path.cwd()
     config_path = resolved_root / DISCORD_JMTY_WEBHOOK_PATH
     if not config_path.exists():
@@ -201,8 +188,11 @@ def get_discord_jmty_webhook_url(repo_root: Path | None = None) -> tuple[str | N
         return None, None
     if not isinstance(loaded, dict):
         return None, None
-    url = str(loaded.get("url", "")).strip()
-    return (url, "config") if url else (None, None)
+    url = str(loaded.get(DISCORD_JMTY_WEBHOOK_URL_ENV) or loaded.get("url") or "").strip()
+    if url:
+        os.environ[DISCORD_JMTY_WEBHOOK_URL_ENV] = url
+        return url, "config-json-env"
+    return None, None
 
 
 def post_discord_jmty_message(content: str, repo_root: Path | None = None) -> bool:
@@ -1267,25 +1257,6 @@ def extract_role_phrase(source_text: str, task_kind: str) -> str:
     return "在宅ワーク"
 
 
-def source_text_prefers_image(task_kind: str, image_path: Path, fallback_text: str, image_ocr_text: str | None = None) -> str:
-    if not image_path.exists():
-        return fallback_text
-    text = image_ocr_text if image_ocr_text is not None else ocr_text(image_path)
-    if not text:
-        return fallback_text
-    normalized = re.sub(r"\s+", "", text)
-    salary_found = bool(re.search(r"(月収|月給|時給|年収)\s*[\d,]+", normalized))
-    if task_kind == "factory":
-        hits = sum(1 for hint in FACTORY_OCR_HINTS if hint in normalized)
-        if hits >= 1 or salary_found:
-            return text
-    else:
-        hits = sum(1 for hint in REMOTE_OCR_HINTS if hint in normalized)
-        if hits >= 1 or salary_found:
-            return text
-    return fallback_text
-
-
 def sheet_column_index(column: str) -> int:
     result = 0
     for char in column.strip().upper():
@@ -1612,30 +1583,6 @@ def repair_kind_for_image(task_kind: str, image_kind: str) -> str:
     return task_kind
 
 
-def build_repaired_sheet_post(task: dict, image_conditions: dict[str, str], current_post: str) -> str:
-    task_kind = str(task.get("kind") or "")
-    repair_kind = repair_kind_for_image(task_kind, image_conditions.get("kind", ""))
-    role = image_conditions.get("role") or first_role_candidate(current_post, repair_kind)
-    salary = image_conditions.get("salary") or first_salary_mention(current_post) or extract_salary_text(current_post, repair_kind)
-    source_lines = [
-        f"職種: {role}",
-        f"給与: {salary}",
-        "種別: 工場求人" if repair_kind == "factory" else "種別: 完全在宅求人",
-        current_post,
-    ]
-    variation = choose_post_variation(str(task.get("account_no") or ""), int(task.get("row_idx") or 0), repair_kind)
-    post_text, _ = build_post_text(
-        repair_kind,
-        str(task.get("region") or ""),
-        "\n".join(line for line in source_lines if line.strip()),
-        str(task.get("account_name") or ""),
-        variation,
-        salary_override=salary,
-        role_override=role,
-    )
-    return strip_markdown_markers(post_text)
-
-
 def collect_sheet_post_validation(
     output_root: Path,
     rows: list[list[str]],
@@ -1711,40 +1658,13 @@ def validate_sheet_posts(output_root: Path, repair: bool, include_drive_ocr: boo
     tasks = read_tasks(output_root)
     rows = read_sheet_rows()
     findings = collect_sheet_post_validation(output_root, rows, tasks, include_drive_ocr=include_drive_ocr)
-    updates: list[dict] = []
-    update_items: list[dict] = []
 
     if repair:
-        for finding in findings:
-            task = next(
-                (
-                    item
-                    for item in tasks
-                    if int(item.get("row_idx") or 0) == int(finding["row_idx"])
-                    and str(item.get("kind") or "") == str(finding["kind"])
-                ),
-                None,
+        if findings:
+            raise JmtyWeeklyAssetsError(
+                "投稿文の自動修復は停止しました。Python固定テンプレートでは本文を作成せず、"
+                "投稿文作成スキルまたはGUIのAI再作成で投稿文を作り直してください。"
             )
-            if not task:
-                continue
-            repaired_post = build_repaired_sheet_post(task, finding["image_conditions"], finding["current_post"])
-            current_value = strip_markdown_markers(str(finding.get("current_post") or ""))
-            if normalize_condition_text(repaired_post) == normalize_condition_text(current_value):
-                continue
-            range_name = f"{SHEET_NAME}!{finding['cell']}"
-            updates.append({"range": range_name, "values": [[repaired_post]]})
-            update_items.append(
-                {
-                    "account_name": finding["account_name"],
-                    "label_ja": finding["label_ja"],
-                    "kind": finding["kind"],
-                    "cell": finding["cell"],
-                    "issues": finding["issues"],
-                    "image_conditions": finding["image_conditions"],
-                }
-            )
-        if updates:
-            batch_update_sheet(updates)
         recheck_rows = read_sheet_rows()
         recheck_findings = collect_sheet_post_validation(output_root, recheck_rows, tasks, include_drive_ocr=include_drive_ocr)
     else:
@@ -1757,10 +1677,10 @@ def validate_sheet_posts(output_root: Path, repair: bool, include_drive_ocr: boo
                 "dry_run": not repair,
                 "checked": len(tasks),
                 "issue_count": len(findings),
-                "planned_or_updated_cells": [item["cell"] for item in update_items] if repair else [item["cell"] for item in findings],
-                "updated_cells": len(updates) if repair else 0,
+                "planned_or_updated_cells": [] if repair else [item["cell"] for item in findings],
+                "updated_cells": 0,
                 "remaining_issue_count": len(recheck_findings) if repair else None,
-                "updates": update_items,
+                "updates": [],
                 "findings": [
                     {
                         "account_name": item["account_name"],
@@ -1813,206 +1733,11 @@ def sheet_post_text(task_kind: str, post_text: str) -> str:
     return strip_markdown_markers(post_text)
 
 
-def choose_post_variation(account_no: str, row_idx: int, task_type: str) -> tuple[str, str]:
-    rng = random.Random(f"{account_no}:{row_idx}:{task_type}:post-variation")
-    return POST_VARIATION_THEMES[rng.randrange(len(POST_VARIATION_THEMES))]
-
-
-def build_post_text(
-    task_type: str,
-    region: str,
-    source_text: str,
-    account_name: str,
-    variation: tuple[str, str] | None = None,
-    salary_override: str = "",
-    role_override: str = "",
-) -> tuple[str, str]:
-    salary_text = salary_override.strip() or extract_salary_text(source_text, task_type)
-    role_phrase = role_override.strip() or extract_role_phrase(source_text, task_type)
-    region_text = clean_display_text(region)
-    variation_name, variation_direction = variation or ("標準", "案件情報に沿って自然に書く。")
-    if task_type in {"remote1", "remote2"} and ("地域" in variation_name or "地域" in variation_direction):
-        variation_name = "在宅訴求"
-        variation_direction = "完全在宅で出勤不要な働き方を、自分ごとに感じやすい導入にする。"
-
-    if task_type == "factory":
-        title = f"【工場】{variation_name}向け／{role_phrase}｜{salary_text}"
-        body = [
-            f"{region_text or '投稿地域'}で仕事を探している方向けの製造求人です。",
-            f"今回は「{variation_name}」を重視する方に伝わりやすい内容でご案内します。",
-            "",
-            f"{role_phrase}の募集で、{salary_text}を目安にしっかり収入を狙えます。",
-            "作業は機械への材料セットやボタン操作が中心。",
-            "特別なスキルは不要で、未経験から始めやすい内容です。",
-            "",
-            variation_direction,
-        ]
-        if "寮" in source_text or "住" in source_text:
-            body.extend(
-                [
-                    "",
-                    "さらに、住まい面のサポートがある案件なら生活費を抑えながら始められます。",
-                ]
-            )
-        body.extend(
-            [
-                "",
-                "教えてもらいながら少しずつ覚えられるので、工場勤務が初めての方でも進めやすい設計です。",
-            ]
-        )
-        details = [
-            "## 仕事内容詳細",
-            f"- {role_phrase}の製造補助",
-            "- マシンオペレーション（材料投入・ボタン操作）",
-            "- 工具を使った組立、目視検査",
-            "- 部品の運搬・ピッキング",
-            "",
-            "※配属工程により担当作業が変わります",
-            "",
-            "## 募集概要",
-            f"- 職種: {role_phrase}",
-            "- 雇用形態: 派遣（長期）",
-            f"- 勤務地: {region_text or '〇〇県〇〇市'}",
-            "- 勤務時間: 2交替制（配属先による）",
-            f"- 給与: {salary_text}",
-            "- 休日: 4勤2休／年間休日141日＋長期休暇",
-            "- 応募条件: 未経験OK",
-            "- 社会保険あり（けが・病気のときも安心）",
-            "",
-        ]
-        if "寮" in source_text or "住" in source_text:
-            details.extend(
-                [
-                    "",
-                    "## 住まいについて",
-                    "- 寮費無料（規定あり）",
-                    "- 引っ越し代のサポートあり",
-                    "- 家具・家電つきの案件もあり",
-                ]
-            )
-        details.extend(
-            [
-                "",
-                "## 応募導線",
-                "「この製造求人について条件を確認したい」という方は、公式LINEにてご連絡ください。",
-                "詳しい条件や見学日程をご案内します。",
-                "",
-                "【公式LINEURL】",
-            ]
-        )
-    else:
-        title = f"【在宅】{variation_name}向け／{role_phrase}｜{salary_text}"
-        body = [
-            "出勤不要で始めやすい、完全在宅の募集です。",
-            f"今回は「{variation_name}」を重視する方に向けて、働き方が伝わるようにまとめています。",
-            f"今回の業務は、{role_phrase}を中心としたデスクワークやオンライン業務が中心。",
-            f"{salary_text}を目安に、出勤不要で仕事を進めたい方に相性のよい内容です。",
-            "業務はテンプレートや手順書に沿って進めるため、未経験からでも流れを掴みやすい構成です。",
-            "",
-            variation_direction,
-        ]
-        details = [
-            "## 具体的な業務",
-            "- スプレッドシート更新",
-            "- 定型文の作成やリライト",
-            "- 日程調整、URL手配、連絡文の送付",
-            "- 月次資料や進捗の取りまとめ補助",
-            "- チーム内タスクの確認や報告",
-            "",
-            "## サポート体制",
-            "- 業務開始時の手順説明",
-            "- テンプレ集配布（文面・報告フォーマット）",
-            "- チャットで随時質問可能",
-            "- 週次で作業レビュー",
-            "",
-            "## 募集概要",
-            f"- 職種: {role_phrase}",
-            "- 雇用形態: 契約/業務委託",
-            "- 勤務地: 完全在宅（全国どこからでも応募OK・出勤不要）",
-            "- 勤務時間: 9:00〜18:00中心（時短相談可）",
-            f"- 給与: {salary_text}",
-            "- 休日: 土日中心",
-            "- 応募条件: **未経験OK**、報連相ができる方",
-            "",
-            "## FAQ",
-            "- PCスキルはどこまで必要？",
-            ": 文字入力・表計算の基本操作ができれば開始可能です。",
-            "- 研修はありますか？",
-            ": あります。実務に直結した内容で進みます。",
-            "",
-            "## 応募導線",
-            "働き方や業務量の相談はLINEで受け付けています。  ",
-            "「在宅事務の詳細希望」とご連絡ください。  ",
-            "【公式LINEURL】",
-            "",
-            "## 在宅でも安心して続けやすい理由",
-            "この募集は、在宅ワークで起こりやすい「連携不足」「質問しづらさ」「業務の属人化」を避けるため、運用ルールを明確にしています。",
-            "日々の連絡はチャット中心で、タスクは優先順位つきで管理。作業開始前にゴールが明確化されるため、迷いながら進める時間を減らせます。",
-            "また、報告フォーマットが統一されているため、業務進捗の共有がしやすく、在宅でもチームの一員として動きやすい環境です。",
-            "困った際は、自己判断で抱え込まずに相談できる導線が準備されています。",
-            "",
-            "## 研修・立ち上がりステップ",
-            "1. オリエンテーション（業務全体像の説明）",
-            "2. ツール設定確認（チャット、管理シート、提出先）",
-            "3. サンプル課題（小さな実務を体験）",
-            "4. 初回実務（レビューつき）",
-            "5. 担当範囲の拡張（習熟度に応じて）",
-            "",
-            f"本募集は**未経験OK**のため、最初から高難易度の成果だけを求める形ではありません。",
-            "まずは正確な対応・期限遵守・報連相の3点を重視し、安定稼働を作ってから次のステップに進みます。",
-            "",
-            "## 報酬イメージ（目安）",
-            "- 初期: 基本業務を安定して実施",
-            "- 中期: 対応件数/品質の安定化で単価レンジ拡大",
-            "- 上位: 追加業務（改善提案、運用補助、進行管理）を担当",
-            "",
-            "現在の募集目安は各投稿タイトル・募集概要に記載のとおりです。",
-            "稼働時間・担当範囲・成果基準によって実際の報酬は変動しますが、継続稼働により段階的な単価アップを狙える設計です。",
-            "",
-            "## 応募条件（詳細）",
-            "- 在宅での業務時間を確保できる方",
-            "- チャット/オンラインMTGでの連絡が可能な方",
-            "- 期限を守って納品・報告できる方",
-            "- PCの基本操作が可能な方",
-            "- 新しい業務を学ぶ意欲がある方",
-            "",
-            "経験は問いません。**未経験OK**で、実務を通じて習得できる前提です。",
-            "",
-            "## こんな方に特に向いています",
-            "- 通勤時間を減らして、在宅中心で働きたい方",
-            "- 1つずつ手順を覚えて仕事の幅を広げたい方",
-            "- 長期的にスキルを積み上げたい方",
-            "- 指示待ちだけでなく、改善意識を持って働きたい方",
-            "",
-            "## 選考〜開始までの流れ",
-            "1. LINEで応募・希望条件を送信",
-            "2. 業務説明と条件確認",
-            "3. 適性確認（簡易ヒアリング）",
-            "4. 稼働開始日の調整",
-            "5. 研修/初回業務スタート",
-            "",
-            "開始時期は案件状況により調整となります。",
-            "「すぐに始めたい」「まずは副業で試したい」など、希望があれば応募時に共有してください。",
-            "",
-            "## 最後に",
-            "本募集はすべて**未経験OK**を前提にしています。",
-            "「まずは話を聞いてみたい」という段階でも問題ありません。",
-            "ご自身の状況に合った働き方を一緒に整理したい方は、LINEからお問い合わせください。",
-            "【公式LINEURL】",
-            "",
-        ]
-
-    post_text = "\n".join(
-        [
-            f"# {title}",
-            "",
-            "## 本文",
-            "\n".join(body),
-            "",
-            *details,
-        ]
-    )
-    return strip_markdown_markers(post_text), salary_text
+def prepare_existing_post_text(task_type: str, source_text: str, label: str) -> tuple[str, str]:
+    post_text = strip_markdown_markers(source_text)
+    if not post_text:
+        raise JmtyWeeklyAssetsError(f"{label}の投稿文が空です。Pythonでは本文を作成しないため、AI作成済みの投稿文を入れてください。")
+    return post_text, extract_salary_text(post_text, task_type)
 
 
 def post_filename_for_label(label_ja: str) -> str:
@@ -2183,10 +1908,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
         folder_name = f"{account_name}"
         if factory_source_post:
             factory_case_source = choose_factory_case(account_no, idx, factory_source_post)
-            factory_variation = choose_post_variation(account_no, idx, "factory")
-            factory_post, factory_salary = build_post_text(
-                "factory", factory_region, factory_case_source, account_name, factory_variation
-            )
+            factory_post, factory_salary = prepare_existing_post_text("factory", factory_source_post, f"{account_name} 工場")
             factory_template_name, factory_template = choose_prompt_template(
                 prompt_templates_dir, "factory", account_no, idx, "工場"
             )
@@ -2222,10 +1944,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                 )
             )
         if remote1_source_post:
-            remote1_variation = choose_post_variation(account_no, idx, "remote1")
-            remote1_post, remote1_salary = build_post_text(
-                "remote1", remote1_region, remote1_source_post, account_name, remote1_variation
-            )
+            remote1_post, remote1_salary = prepare_existing_post_text("remote1", remote1_source_post, f"{account_name} 在宅1")
             remote1_template_name, remote1_template = choose_prompt_template(
                 prompt_templates_dir, "remote1", account_no, idx, "在宅1"
             )
@@ -2261,10 +1980,7 @@ def build_tasks(rows: list[list[str]], prompt_templates_dir: Path = DEFAULT_PROM
                 )
             )
         if remote2_source_post:
-            remote2_variation = choose_post_variation(account_no, idx, "remote2")
-            remote2_post, remote2_salary = build_post_text(
-                "remote2", remote2_region, remote2_source_post, account_name, remote2_variation
-            )
+            remote2_post, remote2_salary = prepare_existing_post_text("remote2", remote2_source_post, f"{account_name} 在宅2")
             remote2_template_name, remote2_template = choose_prompt_template(
                 prompt_templates_dir, "remote2", account_no, idx, "在宅2"
             )
@@ -2485,8 +2201,6 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
     manifest: dict = {"items": {}}
     uploaded = 0
     deleted_images = 0
-    skipped_ocr_keys = set(validation.get("skipped_ocr_keys") or [])
-    ocr_text_by_key = validation.get("ocr_text_by_key") if isinstance(validation.get("ocr_text_by_key"), dict) else {}
 
     for index, task in enumerate(tasks, start=1):
         account_name = task["account_name"]
@@ -2533,37 +2247,7 @@ def sync_drive(output_root: Path, purge_existing: bool, purge_account_images: bo
             raise RuntimeError(
                 f"画像ファイル名が期待値と一致しません: {account_name} / {task['kind']} -> {image_path.name}"
             )
-        if image_exists:
-            task_key = drive_manifest_key(task)
-            if task_key in skipped_ocr_keys:
-                source_text = task["post_text"]
-            else:
-                source_text = source_text_prefers_image(
-                    task["kind"],
-                    image_path,
-                    task["post_text"],
-                    image_ocr_text=str(ocr_text_by_key.get(task_key) or ""),
-                )
-        else:
-            source_text = task["post_text"]
-
-        if source_text != task["post_text"]:
-            new_post_text, new_salary_text = build_post_text(task["kind"], task["region"], source_text, account_name)
-            new_prompt_text = build_banner_prompt(
-                task["kind"],
-                task["region"],
-                new_post_text,
-                account_name,
-                new_salary_text,
-                extract_role_phrase(source_text, task["kind"]),
-            )
-            post_path.write_text(new_post_text, encoding="utf-8")
-            prompt_path.write_text(render_prompt_document(task, image_path, new_post_text, new_prompt_text), encoding="utf-8")
-            task["post_text"] = new_post_text
-            task["salary_text"] = new_salary_text
-            task["prompt_text"] = new_prompt_text
-        else:
-            prompt_path.write_text(render_prompt_document(task, image_path, task["post_text"], task["prompt_text"]), encoding="utf-8")
+        prompt_path.write_text(render_prompt_document(task, image_path, task["post_text"], task["prompt_text"]), encoding="utf-8")
 
         if account_name not in uploaded_account_docs and summary_path.exists():
             replace_drive_file(summary_path, folder_id, existing_files)

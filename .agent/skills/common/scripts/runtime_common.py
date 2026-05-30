@@ -251,7 +251,11 @@ def get_shared_discord_git_webhook_url(repo_root: Path | None = None) -> str | N
     if not isinstance(loaded, dict):
         return None
 
-    saved = loaded.get(DISCORD_GIT_WEBHOOK_SHARED_URL_KEY)
+    saved = loaded.get(DISCORD_GIT_WEBHOOK_URL_ENV)
+    if not isinstance(saved, str):
+        saved = loaded.get(DISCORD_GIT_WEBHOOK_SHARED_URL_KEY)
+    if not isinstance(saved, str):
+        saved = loaded.get("webhook_url")
     if not isinstance(saved, str):
         return None
 
@@ -268,7 +272,8 @@ def get_discord_git_webhook_url() -> tuple[str | None, str | None]:
 
     shared = get_shared_discord_git_webhook_url()
     if shared:
-        return shared, "repo-shared"
+        os.environ[DISCORD_GIT_WEBHOOK_URL_ENV] = shared
+        return shared, "repo-json-env"
 
     saved = get_saved_discord_git_webhook_url()
     if saved:
@@ -299,7 +304,7 @@ def save_shared_discord_git_webhook_url(
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         json.dumps(
-            {DISCORD_GIT_WEBHOOK_SHARED_URL_KEY: normalized},
+            {DISCORD_GIT_WEBHOOK_URL_ENV: normalized},
             ensure_ascii=True,
             indent=2,
             sort_keys=True,
@@ -342,9 +347,15 @@ def get_discord_jmty_webhook_url() -> tuple[str | None, str | None]:
     if config_path.exists():
         try:
             loaded = json.loads(config_path.read_text(encoding="utf-8"))
-            url = loaded.get("url", "").strip() if isinstance(loaded, dict) else ""
+            url = (
+                loaded.get(DISCORD_JMTY_WEBHOOK_URL_ENV)
+                or loaded.get("url")
+                or loaded.get("webhook_url")
+                or ""
+            ).strip() if isinstance(loaded, dict) else ""
             if url:
-                return url, "repo-shared"
+                os.environ[DISCORD_JMTY_WEBHOOK_URL_ENV] = url
+                return url, "repo-json-env"
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -361,10 +372,19 @@ def save_discord_jmty_webhook_url(url: str, repo_root: Path | None = None) -> Pa
     config_path = resolved_root / DISCORD_JMTY_WEBHOOK_SHARED_RELATIVE_PATH
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
-        json.dumps({"url": normalized}, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        json.dumps({DISCORD_JMTY_WEBHOOK_URL_ENV: normalized}, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return config_path
+
+
+def clear_discord_jmty_webhook_url(repo_root: Path | None = None) -> bool:
+    resolved_root = repo_root if repo_root is not None else get_repo_root()
+    config_path = resolved_root / DISCORD_JMTY_WEBHOOK_SHARED_RELATIVE_PATH
+    if not config_path.exists():
+        return False
+    config_path.unlink()
+    return True
 
 
 def get_repo_root() -> Path:
