@@ -1136,6 +1136,52 @@ def gws_auth_status(force: bool = False) -> dict[str, Any]:
         return state
 
 
+def start_gws_auth_background_refresh() -> None:
+    with gws_auth_cache_lock:
+        if gws_auth_cache.get("refreshing"):
+            return
+        gws_auth_cache["refreshing"] = True
+
+    def refresh_worker() -> None:
+        try:
+            gws_auth_status(force=True)
+        finally:
+            with gws_auth_cache_lock:
+                gws_auth_cache["refreshing"] = False
+
+    threading.Thread(target=refresh_worker, daemon=True).start()
+
+
+def gws_auth_status_fast() -> dict[str, Any]:
+    stale_cached: dict[str, Any] | None = None
+    with gws_auth_cache_lock:
+        cached = gws_auth_cache.get("state")
+        checked_at = float(gws_auth_cache.get("checked_at") or 0.0)
+        refreshing = bool(gws_auth_cache.get("refreshing"))
+        age = time.monotonic() - checked_at
+        if isinstance(cached, dict):
+            if age < GWS_AUTH_CACHE_SECONDS:
+                return {**cached, "refreshing": refreshing}
+            if cached.get("ok") and age < GWS_AUTH_STALE_OK_SECONDS:
+                stale_cached = dict(cached)
+                if refreshing:
+                    return {**stale_cached, "stale": True, "refreshing": True}
+    start_gws_auth_background_refresh()
+    if stale_cached is not None:
+        return {**stale_cached, "stale": True, "refreshing": True}
+    if isinstance(cached, dict):
+        return {**cached, "stale": True, "refreshing": True}
+    return {
+        "available": gws_available(),
+        "state": "checking",
+        "label": "gws確認中",
+        "ok": False,
+        "detail": "初期表示を優先して認証状態を確認中です",
+        "checked_at": display_time(),
+        "refreshing": True,
+    }
+
+
 def sanitize_name(value: str, fallback: str = "item") -> str:
     text = (value or "").strip()
     text = re.sub(r'[\\/:*?"<>|]+', "_", text)
@@ -1624,6 +1670,33 @@ def random_post_style_sample(kind: str) -> str:
     return random.choice(samples) if samples else ""
 
 
+def load_remote_job_types() -> list[str]:
+    # inputs/jmty_remote_samples/ 内の *職種リスト*.md から職種名を読み込む
+    # 対応: 番号付き「1. 職種名」、ハイフン「- 職種名」、長音符「ー 職種名」、平文
+    remote_samples_dir = ROOT / "inputs/jmty_remote_samples"
+    job_types: list[str] = []
+    candidates = sorted(remote_samples_dir.glob("*職種リスト*.md"))
+    for path in candidates:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^\s*(?:\d+\.|[-*・ー])\s*(.+)", line)
+            if m:
+                name = m.group(1).strip()
+            else:
+                name = line.strip()
+                if name.startswith("#"):
+                    continue
+            if name and name not in job_types:
+                job_types.append(name)
+    return job_types
+
+
+def random_remote_job_type(rng: random.Random | None = None) -> str:
+    job_types = load_remote_job_types()
+    if not job_types:
+        return ""
+    return (rng or random).choice(job_types)
+
+
 def load_approvals() -> dict[str, Any]:
     with approvals_file_lock:
         loaded = read_json(APPROVALS_PATH, {})
@@ -2027,8 +2100,8 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
             "image_url": file_url(image_path),
             "post_path": rel_to_root(paths["post"]) if path_in_root(paths["post"]) else "",
             "prompt_path": rel_to_root(paths["prompt"]) if path_in_root(paths["prompt"]) else "",
-            "post_history": list_git_history("post", paths["post"]),
-            "image_history": list_git_history("image", image_path),
+            "post_history": [],
+            "image_history": [],
             "approved": bool(approvals.get(key, {}).get("approved")),
             "approved_at": approvals.get(key, {}).get("approved_at"),
             "validation": validation_for_slot(validations, account_name, kind, image_path, post_text),
@@ -2117,8 +2190,8 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     "image_url": file_url(image_path),
                     "post_path": rel_to_root(post_path) if path_in_root(post_path) else "",
                     "prompt_path": rel_to_root(prompt_path) if path_in_root(prompt_path) else "",
-                    "post_history": list_git_history("post", post_path),
-                    "image_history": list_git_history("image", image_path),
+                    "post_history": [],
+                    "image_history": [],
                     "approved": bool(approvals.get(key, {}).get("approved")),
                     "approved_at": approvals.get(key, {}).get("approved_at"),
                     "validation": validation_for_slot(validations, account_name, kind, image_path, display_post),
@@ -3452,6 +3525,52 @@ def task_board_state(force: bool = False) -> dict[str, Any]:
     return state
 
 
+def start_task_board_background_refresh() -> None:
+    with task_board_cache_lock:
+        if task_board_cache.get("refreshing"):
+            return
+        task_board_cache["refreshing"] = True
+
+    def refresh_worker() -> None:
+        try:
+            task_board_state(force=True)
+        finally:
+            with task_board_cache_lock:
+                task_board_cache["refreshing"] = False
+
+    threading.Thread(target=refresh_worker, daemon=True).start()
+
+
+def task_board_state_fast() -> dict[str, Any]:
+    cached_state: dict[str, Any] | None = None
+    with task_board_cache_lock:
+        cached = task_board_cache.get("state")
+        checked_at = float(task_board_cache.get("checked_at") or 0.0)
+        refreshing = bool(task_board_cache.get("refreshing"))
+        if isinstance(cached, dict):
+            if time.monotonic() - checked_at < GITHUB_PROJECT_CACHE_SECONDS:
+                return {**cached, "refreshing": refreshing}
+            cached_state = dict(cached)
+            if refreshing:
+                return {**cached_state, "stale": True, "refreshing": True}
+    start_task_board_background_refresh()
+    if cached_state is not None:
+        return {**cached_state, "stale": True, "refreshing": True}
+    return {
+        "ok": False,
+        "available": bool(shutil.which("gh")),
+        "checked_at": display_time(),
+        "owner": GITHUB_PROJECT_OWNER,
+        "project_number": GITHUB_PROJECT_NUMBER,
+        "url": task_board_project_url(),
+        "items": [],
+        "counts": {},
+        "total": 0,
+        "error": "初期表示を優先してTask Boardを取得中です",
+        "refreshing": True,
+    }
+
+
 def task_board_item_from_payload(payload: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
     item_id = str(payload.get("item_id") or "").strip()
     number = str(payload.get("number") or "").strip()
@@ -3648,7 +3767,7 @@ def app_state(output_root: Path, templates_dir: Path) -> dict[str, Any]:
         "ok": False,
         "detail": "Google認証URLを準備中です",
         "checked_at": display_time(),
-    } if auth_running else gws_auth_status()
+    } if auth_running else gws_auth_status_fast()
     sheet = cached_sheet_state()
     accounts = grouped_accounts(output_root)
     return {
@@ -3671,7 +3790,7 @@ def app_state(output_root: Path, templates_dir: Path) -> dict[str, Any]:
         "post_rules": load_post_rules(),
         "post_style_samples": list_post_style_samples(),
         "project_samples": list_project_samples(),
-        "task_board": task_board_state(),
+        "task_board": task_board_state_fast(),
     }
 
 
@@ -4136,6 +4255,15 @@ def build_post_variation_profiles(targets: list[dict[str, Any]]) -> dict[str, di
     audience_values: dict[str, list[str]] = {}
     audience_indexes: dict[str, int] = {}
 
+    # 在宅ターゲット用に職種リストからバッチ内で被らないようランダム割り当て
+    remote_job_type_list = load_remote_job_types()
+    remote_targets_count = sum(
+        1 for t in targets
+        if ("factory" if normalize_kind(str(t.get("kind") or "")) == "factory" else "remote") == "remote"
+    )
+    remote_job_types = random_option_cycle(remote_job_type_list, remote_targets_count, rng) if remote_job_type_list else []
+    remote_job_type_index = 0
+
     for kind_key in ("factory", "remote"):
         kind_targets = [
             target
@@ -4156,6 +4284,7 @@ def build_post_variation_profiles(targets: list[dict[str, Any]]) -> dict[str, di
         title_style = title_styles[index]
         appeal_axis = appeal_axes[index]
         structure_pattern = structure_patterns[index]
+        job_type = ""
         if kind_key == "remote":
             if REMOTE_POST_PROFILE_FORBIDDEN_PATTERN.search(title_style):
                 title_style = "通勤なしの働きやすさを入口にするタイトル"
@@ -4163,7 +4292,10 @@ def build_post_variation_profiles(targets: list[dict[str, Any]]) -> dict[str, di
                 appeal_axis = "完全在宅で進めやすい働き方"
             if REMOTE_POST_PROFILE_FORBIDDEN_PATTERN.search(structure_pattern):
                 structure_pattern = "タイトルから在宅の働き方、仕事内容、相談しやすさ、応募導線へ進める"
-        profiles[str(target.get("target_id") or "")] = {
+            if remote_job_types and remote_job_type_index < len(remote_job_types):
+                job_type = remote_job_types[remote_job_type_index]
+                remote_job_type_index += 1
+        profile: dict[str, Any] = {
             "title_style": title_style,
             "appeal_axis": appeal_axis,
             "audience": audience,
@@ -4172,6 +4304,9 @@ def build_post_variation_profiles(targets: list[dict[str, Any]]) -> dict[str, di
             "structure_pattern": structure_pattern,
             "cta_flow": cta_flows[index],
         }
+        if job_type:
+            profile["job_type"] = job_type
+        profiles[str(target.get("target_id") or "")] = profile
     return profiles
 
 
@@ -4416,6 +4551,7 @@ def build_post_generation_prompt(
             "- 在宅投稿は完全在宅求人として書き、「完全在宅」と「未経験OK」を必ず入れる。",
             "- 在宅投稿には、都道府県名・市区町村名・駅名などの地名を入れない。勤務地に触れる場合は完全在宅の一般表現だけで書く。",
             "- 在宅投稿で勤務地に触れる場合は、「完全在宅」「出勤不要」「全国どこからでも応募OK」などの一般表現だけを使う。",
+            "- 在宅投稿で variation_profile に job_type が指定されている場合は、その職種を投稿文の中心職種として使う。現在の投稿文（current_post）の職種より job_type を必ず優先すること。",
             "- スタイル見本は文体、絵文字、構成だけ参考にし、地域、給与、条件、職種は対象投稿を優先する。",
             "- 同じバッチ内で1行目タイトル、冒頭フック、訴求軸、対象人物像、絵文字量、構成、CTA前の流れを重複させない。",
             "- emoji_level が none の対象では絵文字を使わない。light / medium / expressive は emoji_instruction に従い、求人投稿として自然な範囲にする。",
@@ -5503,6 +5639,23 @@ def slot_image_path(output_root: Path, account_name: str, kind: str) -> Path:
 def slot_post_path(output_root: Path, account_name: str, kind: str) -> Path:
     task = task_for_slot(output_root, account_name, kind)
     return resolve_task_paths(output_root, task)["post"] if task else output_root / sanitize_name(account_name, "account") / POST_FILENAMES[kind]
+
+
+def slot_history(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    history_type = str(payload.get("history_type") or payload.get("type") or "").strip()
+    account_name = str(payload.get("account_name") or "").strip()
+    kind = normalize_kind(str(payload.get("kind") or ""))
+    if history_type not in {"post", "image"}:
+        raise ValueError("履歴種別が不正です")
+    if not account_name or kind not in EXPECTED_IMAGE_FILENAMES:
+        raise ValueError("アカウント名または種別が不正です")
+    target_path = slot_image_path(output_root, account_name, kind) if history_type == "image" else slot_post_path(output_root, account_name, kind)
+    return {
+        "history_type": history_type,
+        "account_name": account_name,
+        "kind": kind,
+        "entries": list_git_history(history_type, target_path),
+    }
 
 
 def update_task_post_text(output_root: Path, account_name: str, kind: str, text: str) -> None:
@@ -8583,6 +8736,7 @@ def build_post_rewrite_prompt(payload: dict[str, Any], field_info: dict[str, str
             "- 出力はリライト後の投稿文だけにする。説明、見出し、引用符、コードフェンスは不要",
             "- 1行目は投稿タイトルとして扱う。1行目にはタイトル本文だけを書き、「タイトル:」などの接頭辞は付けない",
             "- 1行目タイトルは、今回の制作方向に合わせてその都度違う切り口で新しく書く",
+            "- 在宅投稿で制作方向に job_type が指定されている場合は、その職種を投稿文の中心職種として使う。元の投稿文の職種より job_type を必ず優先すること。",
             "- シャープ記号やアスタリスク記号などのMarkdown装飾は使わない。箇条書きの行頭ハイフンだけ使用可",
             "- CTAとして【公式LINEURL】を必ず残し、投稿文を途中で切らず最後の行まで完結させる",
             "- 最後の行を読点、コロン、開き括弧、短すぎる断片で終わらせない",
@@ -8902,6 +9056,8 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "result": sync_post_to_sheet(self.output_root, payload)})
             elif parsed.path == "/api/post/sheet-sync-all":
                 self.send_json({"ok": True, "result": sync_dirty_posts_to_sheet(self.output_root, payload)})
+            elif parsed.path == "/api/history/list":
+                self.send_json({"ok": True, "history": slot_history(self.output_root, payload)})
             elif parsed.path == "/api/history/restore":
                 self.send_json({"ok": True, "result": restore_slot_history(self.output_root, payload)})
             elif parsed.path == "/api/prompt":
@@ -13999,6 +14155,7 @@ INDEX_HTML = r"""<!doctype html>
       generationJobs: {},
       generationPollTimer: null,
       generationPollInFlight: false,
+      asyncStateRefreshTimer: null,
       stateRequestSeq: 0,
       latestAppliedStateSeq: 0,
       bulkImageQueue: { running: false, mode: "missing", targets: [], index: 0, current: null, failed: 0 },
@@ -14208,9 +14365,19 @@ INDEX_HTML = r"""<!doctype html>
       state.data = data.state;
       syncGenerationJobs(data.state.jobs || [], false);
       render();
+      scheduleAsyncStateRefresh(data.state);
       if (hasRunningGenerationJobs(data.state.jobs)) {
         startGenerationPolling();
       }
+    }
+
+    function scheduleAsyncStateRefresh(data) {
+      const needsRefresh = Boolean(data?.gws_auth?.refreshing || data?.task_board?.refreshing);
+      if (!needsRefresh) return;
+      window.clearTimeout(state.asyncStateRefreshTimer);
+      state.asyncStateRefreshTimer = window.setTimeout(() => {
+        refresh().catch((err) => toast(err.message, true));
+      }, 3000);
     }
 
     function generationJobKey(job) {
@@ -15246,6 +15413,11 @@ INDEX_HTML = r"""<!doctype html>
 	      const root = $("task-board-items");
 	      const meta = $("task-board-meta");
 	      const query = String(state.dashboardQuery || "").trim();
+	      if (board.refreshing && !board.ok) {
+	        meta.textContent = "取得中";
+	        root.innerHTML = renderDashboardEmpty("Task Boardを同期中です", board.error || "バックグラウンドで取得しています。", { action: "同期", onClick: "refreshTaskBoard(this)", buttonIcon: "sync" });
+	        return;
+	      }
 	      if (!board.ok) {
 	        meta.textContent = board.checked_at ? `取得失敗 / ${board.checked_at}` : "取得失敗";
 	        root.innerHTML = renderDashboardEmpty("Task Boardを取得できませんでした", board.error || "同期状態を確認してください。", { action: "同期", onClick: "refreshTaskBoard(this)", buttonIcon: "sync" });
@@ -17918,6 +18090,10 @@ INDEX_HTML = r"""<!doctype html>
       return type === "image" ? (slot?.image_history || []) : (slot?.post_history || []);
     }
 
+    function historyLoaded(slot, type) {
+      return Boolean(type === "image" ? slot?.image_history_loaded : slot?.post_history_loaded);
+    }
+
     function historyLabel(type) {
       return type === "image" ? "画像" : "投稿文";
     }
@@ -17939,7 +18115,19 @@ INDEX_HTML = r"""<!doctype html>
       const slot = findSlot(target.accountName, target.kind);
       const entries = historyEntries(slot, target.type);
       $("history-title").textContent = `${target.accountName} / ${slot?.label || target.kind} / ${historyLabel(target.type)}履歴`;
-      $("history-subtitle").textContent = `${entries.length}件の保存履歴があります。復元してもスプレッドシート反映は別ボタンです。`;
+      if (target.loading) {
+        $("history-subtitle").textContent = "保存履歴を読み込み中です。";
+        $("history-list").innerHTML = `<div class="empty">履歴を取得しています。</div>`;
+        return;
+      }
+      if (target.error) {
+        $("history-subtitle").textContent = "保存履歴を読み込めませんでした。";
+        $("history-list").innerHTML = `<div class="empty">${esc(target.error)}</div>`;
+        return;
+      }
+      $("history-subtitle").textContent = historyLoaded(slot, target.type)
+        ? `${entries.length}件の保存履歴があります。復元してもスプレッドシート反映は別ボタンです。`
+        : "履歴ボタンを押した時点で保存履歴を取得します。";
       $("history-list").innerHTML = entries.length ? entries.map((entry) => `
         <article class="history-item">
           <div class="history-item-main">
@@ -17952,10 +18140,56 @@ INDEX_HTML = r"""<!doctype html>
       `).join("") : `<div class="empty">まだ履歴がありません。生成または保存するとここに表示されます。</div>`;
     }
 
+    async function loadHistoryForTarget(force = false, button = null) {
+      const target = state.historyTarget;
+      if (!target) return;
+      const slot = findSlot(target.accountName, target.kind);
+      const historyProp = target.type === "image" ? "image_history" : "post_history";
+      const loadedProp = target.type === "image" ? "image_history_loaded" : "post_history_loaded";
+      if (!force && slot && slot[loadedProp]) return;
+      target.loading = true;
+      target.error = "";
+      renderHistoryDialog();
+      if (button) {
+        button.disabled = true;
+        button.dataset.loading = "true";
+      }
+      try {
+        const data = await api("/api/history/list", {
+          method: "POST",
+          body: JSON.stringify({
+            history_type: target.type,
+            account_name: target.accountName,
+            kind: target.kind,
+          }),
+        });
+        const current = state.historyTarget;
+        if (!current || current.accountName !== target.accountName || current.kind !== target.kind || current.type !== target.type) return;
+        const latestSlot = findSlot(target.accountName, target.kind);
+        if (latestSlot) {
+          latestSlot[historyProp] = data.history?.entries || [];
+          latestSlot[loadedProp] = true;
+        }
+        target.loading = false;
+        target.error = "";
+      } catch (err) {
+        target.loading = false;
+        target.error = err.message;
+        toast(err.message, true);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+        }
+        renderHistoryDialog();
+      }
+    }
+
     function openHistory(accountName, kind, type) {
-      state.historyTarget = { accountName, kind, type };
+      state.historyTarget = { accountName, kind, type, loading: false, error: "" };
       renderHistoryDialog();
       $("history-dialog").showModal();
+      loadHistoryForTarget().catch((err) => toast(err.message, true));
     }
 
     async function restoreHistory(commit, button = null) {
@@ -17980,7 +18214,7 @@ INDEX_HTML = r"""<!doctype html>
         const issues = data.result?.validationIssues || [];
         toast(issues.length ? `${label}を復元しました。確認事項があります` : `${label}を履歴から復元しました`);
         await refresh();
-        renderHistoryDialog();
+        await loadHistoryForTarget(true);
       } catch (err) {
         toast(err.message, true);
       } finally {
@@ -18885,9 +19119,8 @@ INDEX_HTML = r"""<!doctype html>
     window.visualViewport?.addEventListener("resize", syncAccountSlotValidationHeights);
     $("close-editor").addEventListener("click", () => $("editor").close());
     $("close-history-dialog").addEventListener("click", () => $("history-dialog").close());
-    $("refresh-history-dialog").addEventListener("click", async () => {
-      await refresh();
-      renderHistoryDialog();
+    $("refresh-history-dialog").addEventListener("click", async (event) => {
+      await loadHistoryForTarget(true, event.currentTarget);
     });
     $("history-dialog").addEventListener("close", () => {
       state.historyTarget = null;
