@@ -837,16 +837,13 @@ def rotate_sheet(output_root: Path, dry_run: bool) -> None:
         if row_value(row, REMOTE1_POST_INDEX) and row_value(row, REMOTE2_POST_INDEX)
     ]
 
-    factory_rotated = rotate_bundles(rows, factory_rows, [FACTORY_REGION_INDEX, FACTORY_POST_INDEX])
-    remote_rotated = rotate_bundles(rows, remote_rows, [REMOTE_REGION_INDEX, REMOTE1_POST_INDEX, REMOTE2_POST_INDEX])
+    factory_rotated = rotate_bundles(rows, factory_rows, [FACTORY_REGION_INDEX])
+    remote_rotated = rotate_bundles(rows, remote_rows, [REMOTE_REGION_INDEX])
 
     for row_idx, values in factory_rotated.items():
         rows[row_idx][FACTORY_REGION_INDEX] = values[0]
-        rows[row_idx][FACTORY_POST_INDEX] = values[1]
     for row_idx, values in remote_rotated.items():
         rows[row_idx][REMOTE_REGION_INDEX] = values[0]
-        rows[row_idx][REMOTE1_POST_INDEX] = values[1]
-        rows[row_idx][REMOTE2_POST_INDEX] = values[2]
 
     report = render_rotation_report(rows, factory_rows, remote_rows)
     print(report)
@@ -861,21 +858,10 @@ def rotate_sheet(output_root: Path, dry_run: bool) -> None:
     updates: list[dict] = []
     for row_idx, values in factory_rotated.items():
         sheet_row = row_idx + 7
-        updates.extend(
-            [
-                {"range": f"{SHEET_NAME}!H{sheet_row}", "values": [[values[0]]]},
-                {"range": f"{SHEET_NAME}!J{sheet_row}", "values": [[values[1]]]},
-            ]
-        )
+        updates.append({"range": f"{SHEET_NAME}!H{sheet_row}", "values": [[values[0]]]})
     for row_idx, values in remote_rotated.items():
         sheet_row = row_idx + 7
-        updates.extend(
-            [
-                {"range": f"{SHEET_NAME}!Q{sheet_row}", "values": [[values[0]]]},
-                {"range": f"{SHEET_NAME}!S{sheet_row}", "values": [[values[1]]]},
-                {"range": f"{SHEET_NAME}!U{sheet_row}", "values": [[values[2]]]},
-            ]
-        )
+        updates.append({"range": f"{SHEET_NAME}!Q{sheet_row}", "values": [[values[0]]]})
 
     if updates:
         batch_update_sheet(updates)
@@ -1389,20 +1375,33 @@ def normalize_role_for_compare(value: str) -> str:
     return text
 
 
+_GENERIC_ROLE_NAMES = frozenset({
+    "在宅ワーク", "製造・軽作業",
+    "文章作成・リライト", "在宅事務・データ整理", "データ入力・入力補助",
+    "SNS運用サポート", "オンラインサポート", "在宅営業サポート",
+    "デザイン補助", "動画編集補助", "AI活用ライティング", "在宅カスタマーサポート",
+    "製造スタッフ（マシンオペレーター）", "バッテリー製造スタッフ", "製造補助スタッフ",
+    "マシンオペレーター", "自動車部品の製造", "食品加工", "半導体関連製造",
+    "電子部品の製造", "検査・品質チェック", "組立・ライン作業",
+})
+
+
 def role_matches(expected: str, actual: str, task_kind: str) -> bool:
     expected_norm = normalize_role_for_compare(expected)
     actual_norm = normalize_role_for_compare(actual)
     if not expected_norm or not actual_norm:
+        return True
+    if expected.strip() in _GENERIC_ROLE_NAMES or actual.strip() in _GENERIC_ROLE_NAMES:
         return True
     if expected_norm == actual_norm or expected_norm in actual_norm or actual_norm in expected_norm:
         return True
     if task_kind == "factory":
         keywords = ("検査", "品質", "組立", "ライン", "マシン", "オペ", "自動車", "食品", "半導体", "電子", "製造")
     else:
-        keywords = ("文章", "リライト", "ライター", "事務", "データ入力", "SNS", "サポート", "営業", "デザイン", "動画", "AI")
+        keywords = ("文章", "リライト", "ライター", "事務", "データ入力", "SNS", "サポート", "営業", "デザイン", "動画", "AI", "記事", "翻訳", "秘書")
     expected_hits = {keyword for keyword in keywords if keyword in expected_norm}
     actual_hits = {keyword for keyword in keywords if keyword in actual_norm}
-    return bool(expected_hits and actual_hits and expected_hits == actual_hits)
+    return bool(expected_hits and actual_hits and expected_hits & actual_hits)
 
 
 def logical_post_kind(task_kind: str) -> str:
@@ -1834,9 +1833,10 @@ def validate_post_text(task: dict, post_text: str) -> None:
         raise RuntimeError(f"工場投稿文に在宅系の文言があります: {task['account_name']} / {task['label_ja']}")
     if task["kind"] == "factory":
         expected_region = normalize_prefecture(str(task.get("region") or ""))
+        raw_region = str(task.get("region") or "").strip()
         found_regions = detected_prefecture_names(post_text)
         conflicting_regions = [region for region in found_regions if region != expected_region]
-        if expected_region and expected_region not in post_text:
+        if expected_region and expected_region not in post_text and not (raw_region and raw_region in post_text):
             raise RuntimeError(f"工場投稿文にH列の地域がありません: {task['account_name']} / {task['label_ja']} / {expected_region}")
         if conflicting_regions:
             raise RuntimeError(

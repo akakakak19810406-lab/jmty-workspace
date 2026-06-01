@@ -1,13 +1,14 @@
 ﻿#!/usr/bin/env python3
 # Syncs this JMTY workspace's slash-command adapters for Codex, Gemini, and Claude.
 # Inputs are the COMMANDS table below; outputs are command adapter files under
-# .codex/prompts, .gemini/commands, and .claude/commands.
+# .codex/prompts, .gemini/commands, .claude/commands, and ~/.codex/prompts.
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+GLOBAL_CODEX_PROMPTS_DIR = Path.home() / ".codex" / "prompts"
 
 COMMANDS: list[dict[str, str]] = [
     {"name": "team", "description": "チーム開発モードに切り替える", "kind": "mode"},
@@ -72,7 +73,9 @@ def sync() -> None:
     write_if_changed(ROOT / ".gemini" / "settings.json", json.dumps({"contextFileName": "AGENTS.md"}, ensure_ascii=False, indent=2))
     for command in COMMANDS:
         write_if_changed(ROOT / ".gemini" / "commands" / f"{command['name']}.toml", gemini_content(command))
-        write_if_changed(ROOT / ".codex" / "prompts" / f"{command['name']}.md", codex_content(command))
+        codex_prompt = codex_content(command)
+        write_if_changed(ROOT / ".codex" / "prompts" / f"{command['name']}.md", codex_prompt)
+        write_if_changed(GLOBAL_CODEX_PROMPTS_DIR / f"{command['name']}.md", codex_prompt)
         write_if_changed(ROOT / ".claude" / "commands" / f"{command['name']}.md", claude_content(command))
 
 

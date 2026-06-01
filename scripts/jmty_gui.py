@@ -1671,20 +1671,32 @@ def random_post_style_sample(kind: str) -> str:
 
 
 def load_remote_job_types() -> list[str]:
-    # inputs/jmty_remote_samples/ 内の *職種リスト*.md から職種名を読み込む
-    # 対応: 番号付き「1. 職種名」、ハイフン「- 職種名」、長音符「ー 職種名」、平文
+    # inputs/jmty_remote_samples/ 内の *職種リスト*.md から職種名だけを読み込む。
+    # 「## ルール」以降の箇条書きは職種ではないため、候補へ混ぜない。
     remote_samples_dir = ROOT / "inputs/jmty_remote_samples"
     job_types: list[str] = []
     candidates = sorted(remote_samples_dir.glob("*職種リスト*.md"))
     for path in candidates:
+        in_job_list = False
+        allow_list_items = False
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^\s*(?:\d+\.|[-*・ー])\s*(.+)", line)
-            if m:
-                name = m.group(1).strip()
-            else:
-                name = line.strip()
-                if name.startswith("#"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                if in_job_list:
+                    break
+                allow_list_items = "職種" in stripped and "ルール" not in stripped
+                continue
+            m = re.match(r"^\s*\d+[.)]\s*(.+)", line)
+            if not m:
+                if not (in_job_list or allow_list_items):
                     continue
+                m = re.match(r"^\s*[-*・ー]\s*(.+)", line)
+            if not m:
+                continue
+            in_job_list = True
+            name = m.group(1).strip()
             if name and name not in job_types:
                 job_types.append(name)
     return job_types
@@ -4462,7 +4474,11 @@ def compact_target_for_prompt(target: dict[str, Any], variation_profiles: dict[s
         "row_idx": target.get("row_idx") or "",
         "region": "完全在宅" if is_remote else region,
         "salary_text": target.get("salary_text") or "",
-        "variation_profile": (variation_profiles or {}).get(target_id, {}),
+        "variation_profile": (
+            target.get("variation_profile")
+            if isinstance(target.get("variation_profile"), dict)
+            else (variation_profiles or {}).get(target_id, {})
+        ),
         "current_post": short_context_text(current_post, 2800),
     }
     if target.get("validation_status"):
@@ -4483,6 +4499,7 @@ def build_post_generation_prompt(
     batch_total: int,
     previous_hooks: list[str],
     validation_feedback: str = "",
+    variation_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     has_factory = any(target["kind"] == "factory" for target in targets)
     has_remote = any(target["kind"] != "factory" for target in targets)
@@ -4507,7 +4524,8 @@ def build_post_generation_prompt(
                 "在宅投稿文スタイル見本（文体だけ参考。地名は投稿文に入れない）:\n" + remove_region_names_for_image_prompt(materials.get("remote_styles") or "未登録"),
             ]
         )
-    variation_profiles = build_post_variation_profiles(targets)
+    if variation_profiles is None:
+        variation_profiles = build_post_variation_profiles(targets)
     target_json = json.dumps(
         [compact_target_for_prompt(target, variation_profiles) for target in targets],
         ensure_ascii=False,
@@ -4552,6 +4570,7 @@ def build_post_generation_prompt(
             "- 在宅投稿には、都道府県名・市区町村名・駅名などの地名を入れない。勤務地に触れる場合は完全在宅の一般表現だけで書く。",
             "- 在宅投稿で勤務地に触れる場合は、「完全在宅」「出勤不要」「全国どこからでも応募OK」などの一般表現だけを使う。",
             "- 在宅投稿で variation_profile に job_type が指定されている場合は、その職種を投稿文の中心職種として使う。現在の投稿文（current_post）の職種より job_type を必ず優先すること。",
+            "- job_type がある在宅投稿では、タイトル、仕事内容、募集概要の職種欄に job_type の職種名をそのまま反映する。汎用の「在宅ワーク」「文章作成・リライト」「オンラインサポート」へ戻さない。",
             "- スタイル見本は文体、絵文字、構成だけ参考にし、地域、給与、条件、職種は対象投稿を優先する。",
             "- 同じバッチ内で1行目タイトル、冒頭フック、訴求軸、対象人物像、絵文字量、構成、CTA前の流れを重複させない。",
             "- emoji_level が none の対象では絵文字を使わない。light / medium / expressive は emoji_instruction に従い、求人投稿として自然な範囲にする。",
@@ -4659,6 +4678,13 @@ def post_validation_issues(target: dict[str, Any], text: str) -> list[str]:
             issues.append(prefix + "在宅投稿文に完全在宅の表記がありません")
         if "未経験OK" not in cleaned:
             issues.append(prefix + "在宅投稿文に未経験OKの表記がありません")
+        variation_profile = target.get("variation_profile") if isinstance(target.get("variation_profile"), dict) else {}
+        required_job_type = str(variation_profile.get("job_type") or "").strip()
+        if required_job_type:
+            required_compact = re.sub(r"\s+", "", strip_markdown_markers(required_job_type))
+            cleaned_compact = re.sub(r"\s+", "", strip_markdown_markers(cleaned))
+            if required_compact and required_compact not in cleaned_compact:
+                issues.append(prefix + f"職種リストの職種「{required_job_type}」が投稿文に反映されていません")
         region = str(target.get("region") or "").strip()
         found_regions = set(detected_prefectures(cleaned))
         if region and region != "完全在宅" and region in cleaned:
@@ -4888,6 +4914,11 @@ def run_post_generation_job(job_id: str, output_root: Path, templates_dir: Path,
     saved_items: list[dict[str, Any]] = []
     failed_targets: list[str] = []
     materials = post_generation_materials()
+    variation_profiles = build_post_variation_profiles(targets)
+    for target in targets:
+        profile = variation_profiles.get(str(target.get("target_id") or ""))
+        if profile:
+            target["variation_profile"] = profile
     max_workers = min(POST_GENERATION_CONCURRENCY, max(1, len(targets)))
     worker_chunks: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(max_workers)]
     for index, target in enumerate(targets):
@@ -4992,6 +5023,7 @@ def run_post_generation_job(job_id: str, output_root: Path, templates_dir: Path,
                         len(targets),
                         generation_previous_hooks(),
                         validation_feedback,
+                        variation_profiles=variation_profiles,
                     )
                     stdout, stderr, returncode = run_codex_post_generation_prompt(prompt, job_id)
                     last_stdout = stdout
@@ -8737,6 +8769,7 @@ def build_post_rewrite_prompt(payload: dict[str, Any], field_info: dict[str, str
             "- 1行目は投稿タイトルとして扱う。1行目にはタイトル本文だけを書き、「タイトル:」などの接頭辞は付けない",
             "- 1行目タイトルは、今回の制作方向に合わせてその都度違う切り口で新しく書く",
             "- 在宅投稿で制作方向に job_type が指定されている場合は、その職種を投稿文の中心職種として使う。元の投稿文の職種より job_type を必ず優先すること。",
+            "- job_type がある在宅投稿では、タイトル、仕事内容、募集概要の職種欄に job_type の職種名をそのまま反映する。汎用の「在宅ワーク」「文章作成・リライト」「オンラインサポート」へ戻さない。",
             "- シャープ記号やアスタリスク記号などのMarkdown装飾は使わない。箇条書きの行頭ハイフンだけ使用可",
             "- CTAとして【公式LINEURL】を必ず残し、投稿文を途中で切らず最後の行まで完結させる",
             "- 最後の行を読点、コロン、開き括弧、短すぎる断片で終わらせない",
