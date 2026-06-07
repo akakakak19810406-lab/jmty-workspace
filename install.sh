@@ -105,4 +105,13 @@ fi
 [ -n "$PYTHON_BIN" ] || die "Python 3.10 以上が見つかりませんでした。"
 
 log "Python: $("$PYTHON_BIN" --version 2>&1)"
+
+# --- AI エージェント環境セットアップ（prompt-optimizer）---
+SKILL_DIR="$HOME/.claude/skills/prompt-optimizer/scripts"
+if [ -f "$SKILL_DIR/setup-eval.sh" ]; then
+  log "AI エージェント環境をセットアップします"
+  (cd "$ROOT_DIR" && bash "$SKILL_DIR/setup-eval.sh")
+  (cd "$ROOT_DIR" && bash "$SKILL_DIR/select-vault.sh")
+fi
+
 exec "$PYTHON_BIN" "$ROOT_DIR/scripts/setup_jmty.py" "$@"

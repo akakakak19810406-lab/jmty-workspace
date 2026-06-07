@@ -21,3 +21,7 @@ apps/jmty-gas-image-download/.script-id
 
 # Generated large media
 *.mp4
+.claude/eval/dspy/optimized_program.json
+.claude/eval/.local-config
+.claude/eval/.pending-review
+.claude/eval/.reviewing
