@@ -75,6 +75,13 @@ def install_site(repo: pathlib.Path) -> None:
         env["CLAUDE_PROJECT_DIR"] = str(repo)
         env["CODEX_PROJECT_DIR"] = str(repo)
         subprocess.run([sys.executable, str(record_script), "--rebuild"], cwd=str(repo), env=env, check=False)
+    sanitize_script = repo / ".agent" / "skills" / SKILL_NAME / "scripts" / "sanitize_public_events.py"
+    if sanitize_script.exists():
+        env = os.environ.copy()
+        env["TEAM_INFO_ROOT"] = str(repo)
+        env["CLAUDE_PROJECT_DIR"] = str(repo)
+        env["CODEX_PROJECT_DIR"] = str(repo)
+        subprocess.run([sys.executable, str(sanitize_script)], cwd=str(repo), env=env, check=False)
 
 
 def install_skill(repo: pathlib.Path) -> None:

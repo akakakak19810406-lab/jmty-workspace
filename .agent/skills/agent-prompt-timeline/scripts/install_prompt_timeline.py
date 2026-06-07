@@ -85,6 +85,7 @@ def install_site(repo: pathlib.Path) -> None:
     events_jsonl = data_dir / "events.jsonl"
     if not events_jsonl.exists():
         events_jsonl.write_text("", encoding="utf-8")
+    ensure_site_metadata(repo)
     record_script = repo / ".agent" / "skills" / SKILL_NAME / "scripts" / "record_event.py"
     if record_script.exists():
         env = os.environ.copy()
@@ -101,6 +102,28 @@ def install_site(repo: pathlib.Path) -> None:
         env["CODEX_PROJECT_DIR"] = str(repo)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         subprocess.run([sys.executable, str(sanitize_script)], cwd=str(repo), env=env, check=False)
+
+
+def ensure_site_metadata(repo: pathlib.Path) -> None:
+    data_path = repo / "prompt-timeline" / "data" / "site.json"
+    assets_path = repo / "prompt-timeline" / "assets" / "site.js"
+    payload = {}
+    if data_path.exists():
+        try:
+            loaded = json.loads(data_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+        except json.JSONDecodeError:
+            payload = {}
+    payload.setdefault("repo_name", repo.name)
+    payload.setdefault("vercel_url", "")
+    data_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    assets_path.parent.mkdir(parents=True, exist_ok=True)
+    assets_path.write_text(
+        "/** Repository-specific prompt timeline metadata. */\n"
+        f"window.PROMPT_TIMELINE_SITE = {json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)};\n",
+        encoding="utf-8",
+    )
 
 
 def install_skill(repo: pathlib.Path) -> None:
