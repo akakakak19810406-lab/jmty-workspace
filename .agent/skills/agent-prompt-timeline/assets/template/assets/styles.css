@@ -252,6 +252,14 @@ h1 {
   font-size: 0.72rem;
 }
 
+.toc-overflow {
+  margin: 10px 0 0;
+  border-top: 1px solid var(--line);
+  color: var(--subtle);
+  font-size: 0.78rem;
+  padding: 10px 4px 0;
+}
+
 .content {
   min-width: 0;
 }
@@ -511,6 +519,11 @@ h1 {
   color: #8a5b00;
 }
 
+.status.grouped {
+  background: #f0ecff;
+  color: #5632a8;
+}
+
 .timeline-card h3 {
   margin: 0 0 14px;
   color: var(--navy);
@@ -526,7 +539,7 @@ h1 {
   text-transform: uppercase;
 }
 
-.timeline-card blockquote,
+.prompt-panel,
 .timeline-card .text-block,
 .empty-state {
   margin: 0;
@@ -534,17 +547,76 @@ h1 {
   border-radius: 8px;
   background: #fbfcfe;
   padding: 14px;
-}
-
-.timeline-card blockquote {
   border-left: 5px solid var(--orange);
 }
 
-.timeline-card blockquote p,
 .timeline-card .text-block p {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.normalized-prompt {
+  border-left-color: var(--teal);
+  background: #f3fbfa;
+}
+
+.prompt-panel {
+  background: #111827;
+  color: #eef4fb;
+  padding: 0;
+  overflow: hidden;
+}
+
+.prompt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1f2937;
+  padding: 8px 12px;
+}
+
+.prompt-toolbar span {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 2px 8px;
+}
+
+.prompt-block {
+  max-height: 420px;
+  margin: 0;
+  overflow: auto;
+  background: transparent;
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  line-height: 1.68;
+  padding: 14px;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-block.full {
+  max-height: 70vh;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.prompt-details {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.prompt-details summary {
+  cursor: pointer;
+  background: #263244;
+  color: #fff7dc;
+  font-size: 0.86rem;
+  font-weight: 900;
+  padding: 11px 14px;
 }
 
 .empty-state {
@@ -567,6 +639,21 @@ h1 {
   font-size: 0.86rem;
   font-weight: 800;
   text-decoration: none;
+}
+
+.load-more {
+  min-height: 48px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--navy);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.load-more:hover {
+  background: #244762;
 }
 
 .note-card h2 {

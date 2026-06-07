@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -53,6 +54,14 @@ def copy_tree_contents(src: pathlib.Path, dst: pathlib.Path, overwrite: bool = T
 
 def install_site(repo: pathlib.Path) -> None:
     target = repo / "prompt-timeline"
+    target.mkdir(parents=True, exist_ok=True)
+    for stale in target.iterdir():
+        if stale.name == "data":
+            continue
+        if stale.is_dir():
+            shutil.rmtree(stale)
+        elif stale.exists():
+            stale.unlink()
     copy_tree_contents(TEMPLATE_DIR, target, overwrite=True)
     data_dir = target / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +70,11 @@ def install_site(repo: pathlib.Path) -> None:
         events_jsonl.write_text("", encoding="utf-8")
     record_script = repo / ".agent" / "skills" / SKILL_NAME / "scripts" / "record_event.py"
     if record_script.exists():
-        subprocess.run([sys.executable, str(record_script), "--rebuild"], cwd=str(repo), check=False)
+        env = os.environ.copy()
+        env["TEAM_INFO_ROOT"] = str(repo)
+        env["CLAUDE_PROJECT_DIR"] = str(repo)
+        env["CODEX_PROJECT_DIR"] = str(repo)
+        subprocess.run([sys.executable, str(record_script), "--rebuild"], cwd=str(repo), env=env, check=False)
 
 
 def install_skill(repo: pathlib.Path) -> None:
