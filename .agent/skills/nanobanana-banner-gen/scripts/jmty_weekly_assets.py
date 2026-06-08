@@ -1676,11 +1676,6 @@ def validate_sheet_posts(output_root: Path, repair: bool, include_drive_ocr: boo
     findings = collect_sheet_post_validation(output_root, rows, tasks, include_drive_ocr=include_drive_ocr)
 
     if repair:
-        if findings:
-            raise JmtyWeeklyAssetsError(
-                "投稿文の自動修復は停止しました。Python固定テンプレートでは本文を作成せず、"
-                "投稿文作成スキルまたはGUIのAI再作成で投稿文を作り直してください。"
-            )
         recheck_rows = read_sheet_rows()
         recheck_findings = collect_sheet_post_validation(output_root, recheck_rows, tasks, include_drive_ocr=include_drive_ocr)
     else:
@@ -1693,7 +1688,7 @@ def validate_sheet_posts(output_root: Path, repair: bool, include_drive_ocr: boo
                 "dry_run": not repair,
                 "checked": len(tasks),
                 "issue_count": len(findings),
-                "planned_or_updated_cells": [] if repair else [item["cell"] for item in findings],
+                "planned_or_updated_cells": [item["cell"] for item in findings],
                 "updated_cells": 0,
                 "remaining_issue_count": len(recheck_findings) if repair else None,
                 "updates": [],
