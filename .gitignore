@@ -25,3 +25,6 @@ apps/jmty-gas-image-download/.script-id
 .claude/eval/.local-config
 .claude/eval/.pending-review
 .claude/eval/.reviewing
+
+# 実行時の出力データ（コミットしない）
+outputs/
