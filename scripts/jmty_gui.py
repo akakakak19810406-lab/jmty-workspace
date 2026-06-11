@@ -458,8 +458,40 @@ def read_referral_rows() -> list[list[str]]:
     return res.get("values", [])
 
 
-def reload_referral_url_state() -> dict[str, Any]:
+def resolved_referral_urls_for_accounts(accounts: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+    resolved: list[dict[str, Any]] = []
+    for account in accounts:
+        account_name = str(account.get("account_name") or "")
+        slots: dict[str, Any] = {}
+        for kind in ("factory", "remote1", "remote2"):
+            ref = referral_url_for_target({"account_name": account_name, "kind": kind}, state)
+            record = ref.get("record") if isinstance(ref.get("record"), dict) else {}
+            code_kind = referral_url_kind(kind)
+            codes = record.get("codes") if isinstance(record.get("codes"), dict) else {}
+            slots[kind] = {
+                "url_kind": code_kind,
+                "url": str(ref.get("url") or ""),
+                "code": str(codes.get(code_kind) or ""),
+                "matched": bool(ref.get("matched")),
+                "matched_alias": str(ref.get("matched_alias") or ""),
+                "source_row_number": record.get("row_number") or "",
+                "missing": not bool(ref.get("url")),
+            }
+        resolved.append(
+            {
+                "row_number": account.get("row_number") or "",
+                "account_no": str(account.get("account_no") or ""),
+                "account_name": account_name,
+                "slots": slots,
+            }
+        )
+    return resolved
+
+
+def reload_referral_url_state(accounts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     state = build_referral_url_state(read_referral_rows())
+    if accounts is not None:
+        state["resolved_accounts"] = resolved_referral_urls_for_accounts(accounts, state)
     write_json(REFERRAL_URLS_PATH, state)
     return state
 
@@ -3231,7 +3263,7 @@ def build_sheet_state(rows: list[list[str]], mapping: dict[str, Any]) -> dict[st
 def reload_sheet_state(output_root: Path | None = None) -> dict[str, Any]:
     mapping = load_sheet_mapping()
     state = build_sheet_state(read_sheet_rows(mapping), mapping)
-    state["referral_urls"] = reload_referral_url_state()
+    state["referral_urls"] = reload_referral_url_state(state.get("accounts", []))
     cleanup_result = cleanup_removed_sheet_accounts(output_root or DEFAULT_OUTPUT_ROOT, state)
     state["local_cleanup"] = cleanup_result
     write_json(SHEET_CACHE_PATH, state)
