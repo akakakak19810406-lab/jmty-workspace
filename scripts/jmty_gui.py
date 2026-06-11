@@ -43,6 +43,7 @@ IMAGE_VALIDATION_PATH = GUI_ROOT / "image_validation.json"
 CANCELLED_IMAGES_DIR = GUI_ROOT / "cancelled_images"
 SHEET_MAPPING_PATH = GUI_ROOT / "sheet_mapping.json"
 SHEET_CACHE_PATH = GUI_ROOT / "sheet_cache.json"
+REFERRAL_URLS_PATH = GUI_ROOT / "referral_urls.json"
 JOBS_STATE_PATH = GUI_ROOT / "jobs_state.json"
 CANCELLED_IMAGE_RETENTION_DAYS = max(1, int(os.environ.get("JMTY_CANCELLED_IMAGE_RETENTION_DAYS", "7")))
 DRIVE_SYNC_MANIFEST_FILENAME = "drive_sync_manifest.json"
@@ -231,6 +232,7 @@ TEMPLATE_SAMPLE_CONTEXTS = {
 
 SPREADSHEET_ID = "1GKBTHwBS6W0D30X_yK7vqsaDRWw3p1tXM7lnFhyb0Uw"
 SHEET_NAME = "アカウント情報"
+REFERRAL_SHEET_NAME = "公式LINE"
 SHEET_MAX_ROWS = 1000
 DEFAULT_SHEET_MAPPING = {
     "header_row": 6,
@@ -255,6 +257,8 @@ SHEET_FIELDS = [
     {"key": "remote1_post", "label": "在宅1投稿文", "type": "long"},
     {"key": "remote2_post", "label": "在宅2投稿文", "type": "long"},
 ]
+REFERRAL_PLACEHOLDERS = ("【公式LINEURL】", "【紹介用URL】")
+REFERRAL_URL_PATTERN = re.compile(r"https?://[^\s<>\]）)」』、，,]+", re.IGNORECASE)
 REGION_BOARD_FIELDS = {
     "factory_region": "工場地域",
     "remote1_region": "在宅1地域",
@@ -325,6 +329,207 @@ TEXT_EXTENSIONS = {".md", ".txt", ".json", ".log"}
 def normalize_account_name(name: Any) -> str:
     """アカウント名から改行や余計な空白を除去して正規化します。"""
     return " ".join(str(name or "").split())
+
+
+def normalize_referral_lookup_key(value: Any) -> str:
+    text = normalize_account_name(value).lower()
+    text = re.sub(r"[ 　\t\r\n]+", "", text)
+    text = re.sub(r"[()（）［］\[\]【】「」『』・.．_＿\-ー〜～]", "", text)
+    return text
+
+
+def account_referral_aliases(value: Any) -> list[str]:
+    text = normalize_account_name(value)
+    if not text:
+        return []
+    aliases = {text}
+    for match in re.finditer(r"[（(]([^（）()]+)[）)]", text):
+        aliases.add(normalize_account_name(match.group(1)))
+    without_parentheses = normalize_account_name(re.sub(r"[（(][^（）()]+[）)]", " ", text))
+    if without_parentheses:
+        aliases.add(without_parentheses)
+    before_parentheses = normalize_account_name(re.split(r"[（(]", text, maxsplit=1)[0])
+    if before_parentheses:
+        aliases.add(before_parentheses)
+    return sorted({alias for alias in aliases if alias}, key=len, reverse=True)
+
+
+def row_index_value(row: list[Any], index: int) -> str:
+    return str(row[index] if len(row) > index else "").strip()
+
+
+def valid_referral_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text.startswith(("http://", "https://")):
+        return ""
+    if "❌" in text:
+        return ""
+    return text
+
+
+def referral_url_kind(kind: str) -> str:
+    normalized = normalize_kind(kind)
+    if normalized == "factory":
+        return "factory"
+    if normalized in {"remote", "remote1", "remote2"}:
+        return "remote"
+    if normalized in {"delivery", "light_cargo", "軽貨物"}:
+        return "delivery"
+    return normalized
+
+
+def build_referral_url_state(rows: list[list[Any]]) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    aliases: dict[str, int] = {}
+    base_row = rows[2] if len(rows) > 2 else []
+    base_urls = {
+        "factory": row_index_value(base_row, 2),
+        "delivery": row_index_value(base_row, 4),
+        "remote": row_index_value(base_row, 6),
+    }
+
+    for row_number, row in enumerate(rows[4:], start=5):
+        real_name = row_index_value(row, 0)
+        line_name = row_index_value(row, 1)
+        if not real_name and not line_name:
+            continue
+        urls = {
+            "factory": valid_referral_url(row_index_value(row, 3)),
+            "delivery": valid_referral_url(row_index_value(row, 5)),
+            "remote": valid_referral_url(row_index_value(row, 7)),
+        }
+        codes = {
+            "factory": row_index_value(row, 2),
+            "delivery": row_index_value(row, 4),
+            "remote": row_index_value(row, 6),
+        }
+        record = {
+            "row_number": row_number,
+            "real_name": real_name,
+            "line_name": line_name,
+            "codes": codes,
+            "urls": urls,
+            "aliases": sorted(
+                {
+                    alias
+                    for source in (real_name, line_name)
+                    for alias in account_referral_aliases(source)
+                },
+                key=len,
+                reverse=True,
+            ),
+        }
+        index = len(records)
+        records.append(record)
+        for alias in record["aliases"]:
+            key = normalize_referral_lookup_key(alias)
+            if key and key not in aliases:
+                aliases[key] = index
+
+    return {
+        "loaded_at": display_time(),
+        "spreadsheet_id": SPREADSHEET_ID,
+        "sheet_name": REFERRAL_SHEET_NAME,
+        "range": f"{REFERRAL_SHEET_NAME}!A1:H{SHEET_MAX_ROWS}",
+        "base_urls": base_urls,
+        "records": records,
+        "aliases": aliases,
+    }
+
+
+def read_referral_rows() -> list[list[str]]:
+    res = run_gws(
+        [
+            "sheets",
+            "spreadsheets",
+            "values",
+            "get",
+            "--params",
+            json.dumps(
+                {
+                    "spreadsheetId": SPREADSHEET_ID,
+                    "range": f"{REFERRAL_SHEET_NAME}!A1:H{SHEET_MAX_ROWS}",
+                    "valueRenderOption": "UNFORMATTED_VALUE",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    return res.get("values", [])
+
+
+def reload_referral_url_state() -> dict[str, Any]:
+    state = build_referral_url_state(read_referral_rows())
+    write_json(REFERRAL_URLS_PATH, state)
+    return state
+
+
+def cached_referral_url_state() -> dict[str, Any]:
+    cached = read_json(REFERRAL_URLS_PATH, {})
+    if isinstance(cached, dict) and cached.get("loaded_at"):
+        return cached
+    sheet = read_json(SHEET_CACHE_PATH, {})
+    nested = sheet.get("referral_urls") if isinstance(sheet, dict) else {}
+    return nested if isinstance(nested, dict) else {}
+
+
+def resolve_referral_record(account_name: Any, state: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
+    active_state = state if isinstance(state, dict) else cached_referral_url_state()
+    records = active_state.get("records") if isinstance(active_state, dict) else []
+    alias_index = active_state.get("aliases") if isinstance(active_state, dict) else {}
+    if not isinstance(records, list) or not isinstance(alias_index, dict):
+        return None, ""
+    for alias in account_referral_aliases(account_name):
+        key = normalize_referral_lookup_key(alias)
+        if key in alias_index:
+            index = int(alias_index[key])
+            if 0 <= index < len(records) and isinstance(records[index], dict):
+                return records[index], alias
+    return None, ""
+
+
+def referral_url_for_target(target: dict[str, Any], state: dict[str, Any] | None = None) -> dict[str, Any]:
+    account_name = str(target.get("account_name") or "")
+    kind = referral_url_kind(str(target.get("kind") or ""))
+    record, matched_alias = resolve_referral_record(account_name, state)
+    url = ""
+    if record:
+        urls = record.get("urls") if isinstance(record.get("urls"), dict) else {}
+        url = valid_referral_url(urls.get(kind))
+    return {
+        "account_name": account_name,
+        "kind": kind,
+        "url": url,
+        "matched": bool(record),
+        "matched_alias": matched_alias,
+        "record": record or {},
+    }
+
+
+def urls_in_text(text: str) -> list[str]:
+    return [match.group(0).rstrip("。.") for match in REFERRAL_URL_PATTERN.finditer(str(text or ""))]
+
+
+def post_has_referral_placeholder(text: str) -> bool:
+    return any(marker in str(text or "") for marker in REFERRAL_PLACEHOLDERS)
+
+
+def replace_referral_placeholders(target: dict[str, Any], text: str, *, required: bool = True) -> str:
+    cleaned = strip_markdown_markers(str(text or ""))
+    if not post_has_referral_placeholder(cleaned):
+        return cleaned
+    referral = referral_url_for_target(target)
+    url = str(referral.get("url") or "")
+    if not url:
+        if required:
+            raise ValueError(
+                f"{target.get('account_name', '')} / {target.get('label') or target.get('kind', '')}: "
+                "公式LINE紹介URLを取得できないため、プレースホルダーを置換できません。"
+            )
+        return cleaned
+    for marker in REFERRAL_PLACEHOLDERS:
+        cleaned = cleaned.replace(marker, url)
+    return cleaned
 
 
 @dataclass
@@ -1819,12 +2024,20 @@ def normalized_post_text(text: str) -> str:
     return re.sub(r"\s+", " ", strip_markdown_markers(text)).strip()
 
 
-def sheet_post_text(kind: str, post_text: str) -> str:
-    return strip_markdown_markers(post_text)
+def sheet_post_text(kind: str, post_text: str, account_name: str = "", *, required_url: bool = False) -> str:
+    cleaned = strip_markdown_markers(post_text)
+    if not account_name:
+        return cleaned
+    target = {
+        "account_name": account_name,
+        "kind": normalize_kind(kind),
+        "label": LABELS.get(normalize_kind(kind), normalize_kind(kind)),
+    }
+    return replace_referral_placeholders(target, cleaned, required=required_url)
 
 
-def post_sync_status(kind: str, local_text: str, sheet_text: str) -> str:
-    local_value = normalized_post_text(sheet_post_text(kind, local_text))
+def post_sync_status(kind: str, local_text: str, sheet_text: str, account_name: str = "") -> str:
+    local_value = normalized_post_text(sheet_post_text(kind, local_text, account_name, required_url=False))
     sheet_value = normalized_post_text(sheet_text)
     if not local_value and not sheet_value:
         return "missing"
@@ -2083,7 +2296,7 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
         sheet_post = strip_markdown_markers(str(sheet_values.get(post_field, {}).get("value", "") or ""))
         sheet_cell = str(sheet_values.get(post_field, {}).get("cell", "") or "")
         sheet_column = str(sheet_values.get(post_field, {}).get("column", "") or "")
-        sync_status = post_sync_status(kind, post_text if local_post_exists else "", sheet_post)
+        sync_status = post_sync_status(kind, post_text if local_post_exists else "", sheet_post, account_name)
         image_path = paths["image"]
         prompt_text = read_text_if_exists(paths["prompt"]).strip() or str(task.get("prompt_text") or "")
         prompt_template_name = str(task.get("prompt_template_name") or "")
@@ -2098,7 +2311,7 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
             "post_text": post_text,
             "local_post_text": post_text,
             "local_post_exists": local_post_exists,
-            "local_sheet_post_text": sheet_post_text(kind, post_text) if local_post_exists else "",
+            "local_sheet_post_text": sheet_post_text(kind, post_text, account_name, required_url=False) if local_post_exists else "",
             "sheet_post_text": sheet_post,
             "post_sync_status": sync_status,
             "post_sync_field": post_field,
@@ -2159,7 +2372,7 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     slot = account["slots"][kind]
                     local_text = str(slot.get("local_post_text") or slot.get("post_text") or "")
                     slot["sheet_post_text"] = sheet_post
-                    slot["post_sync_status"] = post_sync_status(kind, local_text, sheet_post)
+                    slot["post_sync_status"] = post_sync_status(kind, local_text, sheet_post, account_name)
                     slot["post_sync_field"] = post_field
                     slot["post_sync_cell"] = sheet_cell
                     slot["post_sync_column"] = sheet_column or str(slot.get("post_col") or "")
@@ -2188,9 +2401,9 @@ def grouped_accounts(output_root: Path) -> list[dict[str, Any]]:
                     "post_text": display_post,
                     "local_post_text": local_post,
                     "local_post_exists": local_post_exists,
-                    "local_sheet_post_text": sheet_post_text(kind, local_post) if local_post_exists else "",
+                    "local_sheet_post_text": sheet_post_text(kind, local_post, account_name, required_url=False) if local_post_exists else "",
                     "sheet_post_text": sheet_post,
-                    "post_sync_status": post_sync_status(kind, local_post if local_post_exists else "", sheet_post),
+                    "post_sync_status": post_sync_status(kind, local_post if local_post_exists else "", sheet_post, account_name),
                     "post_sync_field": post_field,
                     "post_sync_cell": sheet_cell,
                     "post_sync_column": sheet_column,
@@ -3018,6 +3231,7 @@ def build_sheet_state(rows: list[list[str]], mapping: dict[str, Any]) -> dict[st
 def reload_sheet_state(output_root: Path | None = None) -> dict[str, Any]:
     mapping = load_sheet_mapping()
     state = build_sheet_state(read_sheet_rows(mapping), mapping)
+    state["referral_urls"] = reload_referral_url_state()
     cleanup_result = cleanup_removed_sheet_accounts(output_root or DEFAULT_OUTPUT_ROOT, state)
     state["local_cleanup"] = cleanup_result
     write_json(SHEET_CACHE_PATH, state)
@@ -3029,6 +3243,7 @@ def cached_sheet_state() -> dict[str, Any]:
     if isinstance(cached, dict) and cached.get("loaded_at"):
         cached["mapping"] = load_sheet_mapping()
         cached["fields"] = SHEET_FIELDS
+        cached["referral_urls"] = cached_referral_url_state()
         for account in cached.get("accounts", []):
             values = account.get("values") if isinstance(account, dict) else None
             if isinstance(values, dict):
@@ -3043,6 +3258,7 @@ def cached_sheet_state() -> dict[str, Any]:
         "accounts": [],
         "mapping": load_sheet_mapping(),
         "fields": SHEET_FIELDS,
+        "referral_urls": cached_referral_url_state(),
     }
 
 
@@ -4106,10 +4322,10 @@ def save_post(output_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     text = strip_markdown_markers(str(payload.get("text") or ""))
     if not account_name or kind not in EXPECTED_IMAGE_FILENAMES:
         raise ValueError("アカウント名または種別が不正です")
-    text = validate_post_text_or_raise(
-        {"account_name": account_name, "kind": kind, "label": LABELS[kind], "region": str(payload.get("region") or "")},
-        text,
-    )
+    target = {"account_name": account_name, "kind": kind, "label": LABELS[kind], "region": str(payload.get("region") or "")}
+    text = validate_post_text_or_raise(target, text)
+    text = replace_referral_placeholders(target, text, required=True)
+    text = validate_post_text_or_raise(target, text)
 
     matching_task = None
     tasks = load_tasks(output_root)
@@ -4640,10 +4856,21 @@ def post_validation_issues(target: dict[str, Any], text: str) -> list[str]:
     if not normalized:
         issues.append(prefix + "投稿文が空です")
         return issues
-    if "【公式LINEURL】" not in cleaned:
-        issues.append(prefix + "CTAの【公式LINEURL】がありません")
-    if re.search(r"https?://|lin\.ee|line\.me", cleaned, flags=re.IGNORECASE):
-        issues.append(prefix + "実URLらしき文字列があります")
+    referral = referral_url_for_target(target)
+    required_url = str(referral.get("url") or "")
+    found_urls = urls_in_text(cleaned)
+    has_placeholder = post_has_referral_placeholder(cleaned)
+    if required_url:
+        wrong_urls = [url for url in found_urls if url != required_url]
+        if wrong_urls:
+            issues.append(prefix + "正しい紹介URL以外のURLが含まれています: " + "、".join(wrong_urls[:3]))
+        if not has_placeholder and required_url not in found_urls:
+            issues.append(prefix + "CTAの【公式LINEURL】または正しい紹介URLがありません")
+    else:
+        if has_placeholder or found_urls:
+            issues.append(prefix + "公式LINE紹介URLを取得できないため、URLを確定できません")
+        else:
+            issues.append(prefix + "CTAの【公式LINEURL】または紹介URLがありません")
     if re.search(r"[#＃*＊]", str(text or "")):
         issues.append(prefix + "Markdown装飾記号が残っています")
 
@@ -4776,6 +5003,8 @@ def save_generated_posts(
     for target_id, raw_text in generated.items():
         target = target_by_id[target_id]
         text = validate_generated_post_text(target, raw_text)
+        text = replace_referral_placeholders(target, text, required=True)
+        text = validate_post_text_or_raise(target, text)
         task = find_task_for_target(tasks, target)
         if not task:
             task = create_task_for_target(target, text)
@@ -5265,7 +5494,7 @@ def sync_post_to_sheet(output_root: Path, payload: dict[str, Any]) -> dict[str, 
     if not column:
         raise ValueError("反映先の列が不明です")
     cell = f"{column}{row_idx}"
-    value = sheet_post_text(kind, local_text)
+    value = sheet_post_text(kind, local_text, account_name, required_url=True)
     batch_update_sheet([{"range": f"{SHEET_NAME}!{cell}", "values": [[value]]}])
     sheet = reload_sheet_state(output_root)
     return {
@@ -5302,7 +5531,7 @@ def sync_dirty_posts_to_sheet(output_root: Path, payload: dict[str, Any]) -> dic
             if not column:
                 continue
             cell = f"{column}{row_idx}"
-            value = sheet_post_text(normalized_kind, local_text)
+            value = sheet_post_text(normalized_kind, local_text, str(account.get("account_name") or ""), required_url=True)
             updates.append({"range": f"{SHEET_NAME}!{cell}", "values": [[value]]})
             items.append(
                 {
@@ -8886,6 +9115,8 @@ def run_post_rewrite_job(job_id: str, prompt: str, validation_target: dict[str, 
                 raise RuntimeError(clean_stderr or rewritten or f"codex exec exited with {last_returncode}")
             if not rewritten:
                 raise ValueError("AIリライト結果が空でした")
+            rewritten = validate_post_text_or_raise(validation_target, rewritten)
+            rewritten = replace_referral_placeholders(validation_target, rewritten, required=True)
             rewritten = validate_post_text_or_raise(validation_target, rewritten)
             update_job(
                 job_id,
@@ -17380,8 +17611,8 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function sourceAuditThumb(info) {
-      if (info?.reference_url) return { url: info.reference_url, label: "参照画像" };
       if (info?.template_preview_url) return { url: info.template_preview_url, label: "見本画像" };
+      if (info?.reference_url) return { url: info.reference_url, label: "参照画像" };
       return null;
     }
 
@@ -17390,7 +17621,7 @@ INDEX_HTML = r"""<!doctype html>
       const summary = sourceAuditSummary(slot);
       if (!summary) return "";
       const thumb = sourceAuditThumb(info);
-      const pathText = info.reference_path || info.template_preview_path || "";
+      const pathText = info.template_preview_path || info.reference_path || "";
       return `
         <div class="source-audit">
           <div class="source-audit-title"><span class="material-icons" style="font-size:14px;">image_search</span>参照元</div>

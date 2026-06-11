@@ -140,12 +140,12 @@ function imageSourceSummary(slot: JmtySlotState) {
 
 function imageSourceThumb(slot: JmtySlotState) {
   const info = slot.imageSourceInfo;
-  return info?.referenceThumbnailBase64 || info?.templatePreviewBase64 || "";
+  return info?.templatePreviewBase64 || info?.referenceThumbnailBase64 || "";
 }
 
 function imageSourcePath(slot: JmtySlotState) {
   const info = slot.imageSourceInfo;
-  return info?.referencePath || info?.templatePreviewPath || "";
+  return info?.templatePreviewPath || info?.referencePath || "";
 }
 
 function FieldPayloadForm({
