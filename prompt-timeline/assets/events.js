@@ -62,5 +62,65 @@ window.PROMPT_TIMELINE_EVENTS = [
     "tags": [],
     "timestamp": "2026-06-11T18:44:10.167776Z",
     "timestamp_jst": "2026-06-12T03:44:10+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260611T190412Z-8c99e1d6",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019eb7fc-240d-7db2-908e-da2d8614a19b",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/12/rollout-2026-06-12T03-40-15-019eb7fc-240d-7db2-908e-da2d8614a19b.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "gitのスキルをプッシュしてください。",
+    "prompt_preview": "gitのスキルをプッシュしてください。",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-11T19:04:12.302212Z",
+    "timestamp_jst": "2026-06-12T04:04:12+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260611T190633Z-af6b20b2",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019eb7fc-240d-7db2-908e-da2d8614a19b",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/12/rollout-2026-06-12T03-40-15-019eb7fc-240d-7db2-908e-da2d8614a19b.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "OK",
+    "prompt_preview": "OK",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-11T19:06:33.045682Z",
+    "timestamp_jst": "2026-06-12T04:06:33+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260611T191503Z-19875166",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019eb7fc-240d-7db2-908e-da2d8614a19b",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/12/rollout-2026-06-12T03-40-15-019eb7fc-240d-7db2-908e-da2d8614a19b.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "OK",
+    "prompt_preview": "OK",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-11T19:15:03.940690Z",
+    "timestamp_jst": "2026-06-12T04:15:03+09:00"
   }
 ];
