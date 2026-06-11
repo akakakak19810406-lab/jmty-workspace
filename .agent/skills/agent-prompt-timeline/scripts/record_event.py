@@ -22,7 +22,11 @@ JST = ZoneInfo("Asia/Tokyo")
 
 
 def find_repo_root() -> pathlib.Path:
-    env_root = os.environ.get("TEAM_INFO_ROOT") or os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("CODEX_PROJECT_DIR")
+    # 記録先は「いま作業しているリポジトリ」に決める。
+    # CLAUDE_PROJECT_DIR / CODEX_PROJECT_DIR は各エージェントが起動中プロジェクトのルートとして渡す。
+    # TEAM_INFO_ROOT は全シェル共通で team-info を指す固定値なので、ここでは使わない。
+    # （使うと、どのリポジトリで作業しても記録が team-info に集まってしまう）
+    env_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("CODEX_PROJECT_DIR")
     if env_root:
         return pathlib.Path(env_root).expanduser().resolve()
 
