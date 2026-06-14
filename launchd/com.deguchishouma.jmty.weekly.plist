@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.deguchishouma.jmty.weekly</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/deguchishouma/Desktop/jmty-workspace/scripts/run_jmty_weekly_launchd.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/deguchishouma/Desktop/jmty-workspace</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>23</integer>
+    <key>Minute</key>
+    <integer>55</integer>
+  </dict>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/Users/deguchishouma/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>JMTY_GWS_KEYRING_BACKEND</key>
+    <string>keyring</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/deguchishouma/Desktop/jmty-workspace/outputs/launchd/jmty-weekly.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/deguchishouma/Desktop/jmty-workspace/outputs/launchd/jmty-weekly.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

@@ -122,5 +122,125 @@ window.PROMPT_TIMELINE_EVENTS = [
     "tags": [],
     "timestamp": "2026-06-11T19:15:03.940690Z",
     "timestamp_jst": "2026-06-12T04:15:03+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260614T065822Z-629ab225",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019ec4ab-2dff-7213-ac1c-b09452098fdc",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/14/rollout-2026-06-14T14-46-53-019ec4ab-2dff-7213-ac1c-b09452098fdc.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "Macのローンチド機能を使って定期実行される仕組みを作りたいです。\n\n今、ローカルGUIアプリで作っている、一括実行ボタンで実行される仕組み、プログラミング、スクリプトがあるじゃないですか。あれを毎週月曜日午前0時、毎週、もっと言うと日曜日の23:55ぐらいから仕組みを走らせて、毎週毎週、投稿分と画像分、それをする仕組みをしてほしいし、あとGWSの認証が切れていた時のフォールバックも含めて作って、自動で認証復活させる仕組みも作って、完全自動で回るようにしたいです。\n\n何か問題が起きればDiscordに通知するような形がいいので、Discordのwebhookを渡します。そこに連絡するようにお願いします。今までいろんなリポジトリとかいろんなところでDiscordのwebhookって複数あるから、しっかり区別して、今回渡すもので通知をするようにお願いします。https://discord.com/api/webhooks/REDACTED",
+    "prompt_preview": "Macのローンチド機能を使って定期実行される仕組みを作りたいです。\n\n今、ローカルGUIアプリで作っている、一括実行ボタンで実行される仕組み、プログラミング、スクリプトがあるじゃないですか。あれを毎週月曜日午前0時、毎週、もっと言うと日曜日の23:55ぐらいから仕組みを走らせて、毎週毎週、投稿分と画像分、それをする仕組みをしてほしいし、あとGWSの認証が切れていた時のフォールバックも含めて作って、自動で認証復活させる仕組みも作って、完全自動で回るようにしたいです。\n\n何か問題が起きればDiscordに通知するような形がいいので、Discordのwebhookを渡します。そこに連絡するようにお願いします。今までいろんなリポジトリとかいろんなところでDiscordのwebhookって複数あるから、しっかり区別して、今回渡すもので通知をするようにお願いします。https://discord.com/api/webhooks/REDACTED",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-14T06:58:22.844592Z",
+    "timestamp_jst": "2026-06-14T15:58:22+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260614T065904Z-a2caf257",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019ec4ab-2dff-7213-ac1c-b09452098fdc",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/14/rollout-2026-06-14T14-46-53-019ec4ab-2dff-7213-ac1c-b09452098fdc.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "OK",
+    "prompt_preview": "OK",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-14T06:59:04.421207Z",
+    "timestamp_jst": "2026-06-14T15:59:04+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260614T074444Z-21d05057",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019ec4ab-2dff-7213-ac1c-b09452098fdc",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/14/rollout-2026-06-14T14-46-53-019ec4ab-2dff-7213-ac1c-b09452098fdc.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "OK",
+    "prompt_preview": "OK",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-14T07:44:44.385316Z",
+    "timestamp_jst": "2026-06-14T16:44:44+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260614T080242Z-7dfbb255",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019ec4ab-2dff-7213-ac1c-b09452098fdc",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/14/rollout-2026-06-14T14-46-53-019ec4ab-2dff-7213-ac1c-b09452098fdc.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "gitのスキルをプッシュしてください",
+    "prompt_preview": "gitのスキルをプッシュしてください",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-14T08:02:42.700708Z",
+    "timestamp_jst": "2026-06-14T17:02:42+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260614T080319Z-f07c9610",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019ec4ab-2dff-7213-ac1c-b09452098fdc",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/14/rollout-2026-06-14T14-46-53-019ec4ab-2dff-7213-ac1c-b09452098fdc.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "gitのスキルを使ってプッシュしてください",
+    "prompt_preview": "gitのスキルを使ってプッシュしてください",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-14T08:03:19.195262Z",
+    "timestamp_jst": "2026-06-14T17:03:19+09:00"
+  },
+  {
+    "actions": [],
+    "actor": "agent",
+    "id": "20260614T080509Z-0630e733",
+    "kind": "prompt",
+    "meta": {
+      "cwd": "/Users/deguchishouma/Desktop/jmty-workspace",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "019ec4ab-2dff-7213-ac1c-b09452098fdc",
+      "transcript_path": "/Users/deguchishouma/.codex/sessions/2026/06/14/rollout-2026-06-14T14-46-53-019ec4ab-2dff-7213-ac1c-b09452098fdc.jsonl"
+    },
+    "parent_id": "",
+    "prompt_original": "OK",
+    "prompt_preview": "OK",
+    "source": "codex-user-prompt",
+    "summary": "",
+    "tags": [],
+    "timestamp": "2026-06-14T08:05:09.531787Z",
+    "timestamp_jst": "2026-06-14T17:05:09+09:00"
   }
 ];
