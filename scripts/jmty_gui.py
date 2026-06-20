@@ -2635,6 +2635,24 @@ def write_template_preview_image(
     return preview_path
 
 
+def template_name_without_kind_prefix(name: str) -> str:
+    stem = sanitize_name(name, "template")
+    prefixes = ("common", "factory", "remote")
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            lowered = stem.lower()
+            if lowered == prefix:
+                return "template"
+            marker = f"{prefix}_"
+            if lowered.startswith(marker):
+                stem = stem[len(marker):] or "template"
+                changed = True
+                break
+    return stem
+
+
 def auto_template_name(kind: str, prompt_text: str, *image_names: str) -> str:
     haystack = " ".join([prompt_text, *image_names]).lower()
     style_patterns = [
@@ -5682,6 +5700,54 @@ def save_template(templates_dir: Path, payload: dict[str, Any]) -> dict[str, Any
         "derive_prompt": derive_prompt,
         "should_create_prompt": derive_prompt,
         "should_generate_preview": bool(submitted_prompt_text and not existing_preview_path),
+    }
+
+
+def update_template_kind(templates_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    template_path = template_path_from_filename(templates_dir, str(payload.get("filename") or ""))
+    kind = normalize_kind(str(payload.get("kind") or "common"))
+    current_kind = template_kind_from_name(template_path)
+    preview_path = preview_for_template(templates_dir, template_path)
+    if kind == current_kind:
+        return {
+            "saved": True,
+            "changed": False,
+            "filename": template_path.name,
+            "name": template_path.stem,
+            "kind": kind,
+            "path": rel_to_root(template_path),
+            "preview_path": rel_to_root(preview_path) if preview_path else "",
+            "preview_url": file_url(preview_path),
+        }
+
+    prefix = template_prefix(kind)
+    base_name = template_name_without_kind_prefix(template_path.stem)
+    new_path = templates_dir / f"{prefix}_{base_name}{template_path.suffix}"
+    if new_path.resolve() != template_path.resolve() and new_path.exists():
+        new_path = unique_path(new_path)
+    if not path_in_root(new_path, templates_dir):
+        raise ValueError("テンプレート保存先が不正です")
+
+    template_path.rename(new_path)
+    new_preview_path = None
+    if preview_path:
+        candidate = template_preview_path_for_ext(templates_dir, new_path, preview_path.suffix)
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        if candidate.resolve() != preview_path.resolve():
+            remove_template_preview_variants(templates_dir, new_path, keep_path=candidate)
+            preview_path.rename(candidate)
+        new_preview_path = candidate
+
+    return {
+        "saved": True,
+        "changed": True,
+        "old_filename": template_path.name,
+        "filename": new_path.name,
+        "name": new_path.stem,
+        "kind": kind,
+        "path": rel_to_root(new_path),
+        "preview_path": rel_to_root(new_preview_path) if new_preview_path else "",
+        "preview_url": file_url(new_preview_path),
     }
 
 
@@ -9360,6 +9426,8 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "result": save_prompt(self.output_root, payload)})
             elif parsed.path == "/api/template":
                 self.send_json({"ok": True, "result": save_template(self.templates_dir, payload)})
+            elif parsed.path == "/api/template/kind":
+                self.send_json({"ok": True, "result": update_template_kind(self.templates_dir, payload)})
             elif parsed.path == "/api/template/delete":
                 self.send_json({"ok": True, "result": delete_template(self.templates_dir, payload)})
             elif parsed.path == "/api/template/ai-generate":
@@ -12215,6 +12283,56 @@ INDEX_HTML = r"""<!doctype html>
       padding: 3px 8px;
       font-size: 11px;
       font-weight: 700;
+    }
+    .template-kind-select-label {
+      flex: 0 0 auto;
+      margin: 0;
+    }
+    .template-kind-select {
+      min-height: 34px;
+      min-width: 78px;
+      border-radius: 999px;
+      border: 1px solid #cad5e4;
+      background: #f8fafc;
+      color: #334155;
+      padding: 4px 28px 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .template-kind-select[data-kind="common"] {
+      border-color: #2563eb;
+      background: #dbeafe;
+      color: #1e3a8a;
+    }
+    .template-kind-select[data-kind="factory"] {
+      border-color: #c2410c;
+      background: #ffedd5;
+      color: #7c2d12;
+    }
+    .template-kind-select[data-kind="remote"] {
+      border-color: #059669;
+      background: #d1fae5;
+      color: #064e3b;
+    }
+    .template-kind-select:disabled {
+      cursor: not-allowed;
+      opacity: .82;
+    }
+    .template-kind-select[data-saving="true"] {
+      cursor: progress;
+      box-shadow: 0 0 0 3px rgba(11, 87, 208, .12);
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }
     .template-job {
       display: grid;
@@ -17756,6 +17874,27 @@ INDEX_HTML = r"""<!doctype html>
       return raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim() || "画風テンプレ";
     }
 
+    function templateKindSelect(item, job) {
+      const kind = item?.kind || "common";
+      const options = [
+        ["common", "共通"],
+        ["factory", "工場"],
+        ["remote", "在宅"],
+      ].map(([value, label]) => `<option value="${value}" ${kind === value ? "selected" : ""}>${label}</option>`).join("");
+      return `
+        <label class="template-kind-select-label" title="分類だけを変更します。画像生成は開始しません。">
+          <span class="sr-only">分類</span>
+          <select class="template-kind-select"
+                  data-kind="${esc(kind)}"
+                  aria-label="${esc(templateDisplayName(item))} の分類"
+                  onchange='updateTemplateKind(${arg(item.filename)}, this)'
+                  ${job ? "disabled" : ""}>
+            ${options}
+          </select>
+        </label>
+      `;
+    }
+
     function templatePreviewInner(item, emptyText = "見本画像なし") {
       if (item?.preview_url) {
         return `<img src="${esc(item.preview_url)}" alt="${esc(templateDisplayName(item))} の見本画像" loading="lazy">`;
@@ -17885,7 +18024,7 @@ INDEX_HTML = r"""<!doctype html>
                   <strong title="${esc(displayName)}">${esc(displayName)}</strong>
                   <small>${esc(updatedDate || "更新日なし")}</small>
                 </div>
-                <span class="template-kind-chip">${esc(templateKindLabel(item.kind))}</span>
+                ${templateKindSelect(item, job)}
               </div>
               ${job ? `
                 <div class="template-job">
@@ -19201,6 +19340,53 @@ INDEX_HTML = r"""<!doctype html>
       } finally {
         button.disabled = false;
         button.removeAttribute("data-loading");
+      }
+    }
+
+    async function updateTemplateKind(filename, select) {
+      const item = templateByFilename(filename);
+      if (!item || !select) return;
+      const previousKind = item.kind || "common";
+      const nextKind = select.value || "common";
+      if (previousKind === nextKind) return;
+      try {
+        select.dataset.kind = nextKind;
+        select.disabled = true;
+        select.dataset.saving = "true";
+        const data = await api("/api/template/kind", {
+          method: "POST",
+          body: JSON.stringify({ filename, kind: nextKind }),
+        });
+        const updated = data.result || {};
+        if (state.data?.templates) {
+          state.data.templates = state.data.templates.map((template) =>
+            template.filename === filename
+              ? {
+                  ...template,
+                  filename: updated.filename || template.filename,
+                  name: updated.name || template.name,
+                  kind: updated.kind || nextKind,
+                  path: updated.path || template.path,
+                  preview_path: updated.preview_path || template.preview_path,
+                  preview_url: updated.preview_url || template.preview_url,
+                }
+              : template
+          );
+        }
+        select.dataset.kind = updated.kind || nextKind;
+        if (state.templateDetailFile === filename) {
+          state.templateDetailFile = updated.filename || filename;
+          renderTemplateDetail(state.templateDetailFile);
+        }
+        renderTemplateManagement(state.data?.templates || []);
+        toast(`${templateDisplayName(updated)} の分類を${templateKindLabel(nextKind)}に変更しました`);
+        refreshImageArea({ announce: false }).catch(() => {});
+      } catch (err) {
+        select.value = previousKind;
+        select.dataset.kind = previousKind;
+        select.disabled = false;
+        delete select.dataset.saving;
+        toast(err.message, true);
       }
     }
 
