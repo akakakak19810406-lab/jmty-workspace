@@ -28,11 +28,13 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/Users/deguchishouma/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>/Users/deguchishouma/.nvm/versions/node/v22.17.1/bin:/opt/homebrew/bin:/usr/local/bin:/Users/deguchishouma/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
     <key>JMTY_GWS_KEYRING_BACKEND</key>
     <string>keyring</string>
+    <key>JMTY_GWS_BIN</key>
+    <string>/Users/deguchishouma/.nvm/versions/node/v22.17.1/bin/gws</string>
   </dict>
 
   <key>StandardOutPath</key>

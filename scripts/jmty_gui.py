@@ -8,6 +8,7 @@ import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
+import errno
 import json
 import mimetypes
 import os
@@ -43,6 +44,7 @@ IMAGE_VALIDATION_PATH = GUI_ROOT / "image_validation.json"
 CANCELLED_IMAGES_DIR = GUI_ROOT / "cancelled_images"
 SHEET_MAPPING_PATH = GUI_ROOT / "sheet_mapping.json"
 SHEET_CACHE_PATH = GUI_ROOT / "sheet_cache.json"
+REFERRAL_URL_CONFIG_PATH = ROOT / "config/jmty-referral-urls.json"
 REFERRAL_URLS_PATH = GUI_ROOT / "referral_urls.json"
 JOBS_STATE_PATH = GUI_ROOT / "jobs_state.json"
 CANCELLED_IMAGE_RETENTION_DAYS = max(1, int(os.environ.get("JMTY_CANCELLED_IMAGE_RETENTION_DAYS", "7")))
@@ -258,7 +260,7 @@ SHEET_FIELDS = [
     {"key": "remote2_post", "label": "在宅2投稿文", "type": "long"},
 ]
 REFERRAL_PLACEHOLDERS = ("【公式LINEURL】", "【紹介用URL】")
-REFERRAL_URL_PATTERN = re.compile(r"https?://[^\s<>\]）)」』、，,]+", re.IGNORECASE)
+REFERRAL_URL_PATTERN = re.compile(r"https?://[A-Za-z0-9._~:/?#@\[\]!$&'()*+,;=%-]+", re.IGNORECASE)
 REGION_BOARD_FIELDS = {
     "factory_region": "工場地域",
     "remote1_region": "在宅1地域",
@@ -376,6 +378,148 @@ def referral_url_kind(kind: str) -> str:
     if normalized in {"delivery", "light_cargo", "軽貨物"}:
         return "delivery"
     return normalized
+
+
+def strict_referral_url(value: Any, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    url = valid_referral_url(text)
+    if not url:
+        raise ValueError(f"{label} は http:// または https:// で始まるURLを入力してください")
+    return url
+
+
+def referral_config_raw_records(payload: dict[str, Any]) -> list[Any]:
+    records = payload.get("records")
+    if records is None:
+        records = payload.get("accounts")
+    return records if isinstance(records, list) else []
+
+
+def normalized_referral_config_record(raw: Any, *, strict: bool = False) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        if strict:
+            raise ValueError("紹介URL設定の形式が不正です")
+        return None
+    urls_payload = raw.get("urls") if isinstance(raw.get("urls"), dict) else {}
+    account_name = normalize_account_name(
+        raw.get("account_name")
+        or raw.get("real_name")
+        or raw.get("line_name")
+        or raw.get("name")
+    )
+    if not account_name:
+        has_values = any(str(raw.get(key) or "").strip() for key in ("factory_url", "remote_url")) or any(
+            str(urls_payload.get(key) or "").strip() for key in ("factory", "remote")
+        )
+        if strict and has_values:
+            raise ValueError("紹介URL設定にアカウント名がありません")
+        return None
+
+    def config_url(key: str, label: str) -> str:
+        value = raw.get(f"{key}_url")
+        if value is None:
+            value = urls_payload.get(key)
+        return strict_referral_url(value, f"{account_name} / {label}") if strict else valid_referral_url(value)
+
+    aliases = set(account_referral_aliases(account_name))
+    aliases_payload = raw.get("aliases")
+    if isinstance(aliases_payload, str):
+        aliases_payload = [aliases_payload]
+    if isinstance(aliases_payload, list):
+        for alias in aliases_payload:
+            aliases.update(account_referral_aliases(alias))
+    aliases.add(account_name)
+    urls = {
+        "factory": config_url("factory", "工場系"),
+        "delivery": config_url("delivery", "軽貨物系"),
+        "remote": config_url("remote", "在宅系"),
+    }
+    return {
+        "row_number": raw.get("row_number") or "",
+        "account_name": account_name,
+        "real_name": account_name,
+        "line_name": account_name,
+        "codes": {},
+        "urls": urls,
+        "aliases": sorted({alias for alias in aliases if alias}, key=len, reverse=True),
+    }
+
+
+def build_referral_config_state(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = payload if isinstance(payload, dict) else read_json(REFERRAL_URL_CONFIG_PATH, {})
+    records: list[dict[str, Any]] = []
+    aliases: dict[str, int] = {}
+    for raw in referral_config_raw_records(config):
+        record = normalized_referral_config_record(raw)
+        if not record:
+            continue
+        urls = record.get("urls") if isinstance(record.get("urls"), dict) else {}
+        if not valid_referral_url(urls.get("factory")) and not valid_referral_url(urls.get("remote")):
+            continue
+        index = len(records)
+        records.append(record)
+        for alias in record["aliases"]:
+            key = normalize_referral_lookup_key(alias)
+            if key and key not in aliases:
+                aliases[key] = index
+    return {
+        "loaded_at": str(config.get("updated_at") or "") if isinstance(config, dict) else "",
+        "config_path": rel_to_root(REFERRAL_URL_CONFIG_PATH),
+        "version": int(config.get("version") or 1) if isinstance(config, dict) else 1,
+        "placeholder": REFERRAL_PLACEHOLDERS[0],
+        "records": records,
+        "aliases": aliases,
+    }
+
+
+def referral_url_config_state(accounts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    state = build_referral_config_state()
+    factory_count = sum(1 for record in state["records"] if valid_referral_url(record.get("urls", {}).get("factory")))
+    remote_count = sum(1 for record in state["records"] if valid_referral_url(record.get("urls", {}).get("remote")))
+    state["summary"] = {
+        "configured_accounts": len(state["records"]),
+        "factory_count": factory_count,
+        "remote_count": remote_count,
+    }
+    if accounts is not None:
+        state["resolved_accounts"] = resolved_referral_urls_for_accounts(accounts, state)
+    return state
+
+
+def save_referral_url_config(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_records = referral_config_raw_records(payload)
+    if not isinstance(raw_records, list):
+        raise ValueError("紹介URL設定の records 配列がありません")
+    merged: dict[str, dict[str, Any]] = {}
+    for raw in raw_records:
+        record = normalized_referral_config_record(raw, strict=True)
+        if not record:
+            continue
+        urls = record.get("urls") if isinstance(record.get("urls"), dict) else {}
+        factory_url = valid_referral_url(urls.get("factory"))
+        remote_url = valid_referral_url(urls.get("remote"))
+        if not factory_url and not remote_url:
+            continue
+        key = normalize_referral_lookup_key(record["account_name"])
+        if not key:
+            continue
+        base_aliases = set(account_referral_aliases(record["account_name"]))
+        extra_aliases = [alias for alias in record["aliases"] if alias not in base_aliases and alias != record["account_name"]]
+        merged[key] = {
+            "account_name": record["account_name"],
+            "factory_url": factory_url,
+            "remote_url": remote_url,
+            "aliases": extra_aliases,
+        }
+    config = {
+        "version": 1,
+        "updated_at": display_time(),
+        "records": sorted(merged.values(), key=lambda item: item["account_name"]),
+    }
+    write_json(REFERRAL_URL_CONFIG_PATH, config)
+    return referral_url_config_state()
 
 
 def build_referral_url_state(rows: list[list[Any]]) -> dict[str, Any]:
@@ -506,7 +650,7 @@ def cached_referral_url_state() -> dict[str, Any]:
 
 
 def resolve_referral_record(account_name: Any, state: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
-    active_state = state if isinstance(state, dict) else cached_referral_url_state()
+    active_state = state if isinstance(state, dict) else build_referral_config_state()
     records = active_state.get("records") if isinstance(active_state, dict) else []
     alias_index = active_state.get("aliases") if isinstance(active_state, dict) else {}
     if not isinstance(records, list) or not isinstance(alias_index, dict):
@@ -548,16 +692,9 @@ def post_has_referral_placeholder(text: str) -> bool:
 
 def replace_referral_placeholders(target: dict[str, Any], text: str, *, required: bool = True) -> str:
     cleaned = strip_markdown_markers(str(text or ""))
-    if not post_has_referral_placeholder(cleaned):
-        return cleaned
-    referral = referral_url_for_target(target)
-    url = str(referral.get("url") or "")
+    ref = referral_url_for_target(target)
+    url = valid_referral_url(ref.get("url"))
     if not url:
-        if required:
-            raise ValueError(
-                f"{target.get('account_name', '')} / {target.get('label') or target.get('kind', '')}: "
-                "公式LINE紹介URLを取得できないため、プレースホルダーを置換できません。"
-            )
         return cleaned
     for marker in REFERRAL_PLACEHOLDERS:
         cleaned = cleaned.replace(marker, url)
@@ -1568,7 +1705,7 @@ def commit_history_paths(history_type: str, paths: list[Path], subject: str, det
         temp_index = str(Path(temp_dir) / "index")
         env = git_author_env({"GIT_INDEX_FILE": temp_index})
         git_run(["read-tree", base_commit], extra_env=env)
-        git_run(["add", "-A", "--", *rel_paths], extra_env=env)
+        git_run(["add", "-A", "-f", "--", *rel_paths], extra_env=env)
         diff = git_run(["diff-index", "--cached", "--quiet", base_commit, "--"], check=False, extra_env=env)
         if diff.returncode == 0:
             return {
@@ -3281,7 +3418,8 @@ def build_sheet_state(rows: list[list[str]], mapping: dict[str, Any]) -> dict[st
 def reload_sheet_state(output_root: Path | None = None) -> dict[str, Any]:
     mapping = load_sheet_mapping()
     state = build_sheet_state(read_sheet_rows(mapping), mapping)
-    state["referral_urls"] = reload_referral_url_state(state.get("accounts", []))
+    state["sheet_referral_urls"] = reload_referral_url_state(state.get("accounts", []))
+    state["referral_urls"] = referral_url_config_state(state.get("accounts", []))
     cleanup_result = cleanup_removed_sheet_accounts(output_root or DEFAULT_OUTPUT_ROOT, state)
     state["local_cleanup"] = cleanup_result
     write_json(SHEET_CACHE_PATH, state)
@@ -3293,7 +3431,8 @@ def cached_sheet_state() -> dict[str, Any]:
     if isinstance(cached, dict) and cached.get("loaded_at"):
         cached["mapping"] = load_sheet_mapping()
         cached["fields"] = SHEET_FIELDS
-        cached["referral_urls"] = cached_referral_url_state()
+        cached["sheet_referral_urls"] = cached_referral_url_state()
+        cached["referral_urls"] = referral_url_config_state(cached.get("accounts", []))
         for account in cached.get("accounts", []):
             values = account.get("values") if isinstance(account, dict) else None
             if isinstance(values, dict):
@@ -3308,7 +3447,8 @@ def cached_sheet_state() -> dict[str, Any]:
         "accounts": [],
         "mapping": load_sheet_mapping(),
         "fields": SHEET_FIELDS,
-        "referral_urls": cached_referral_url_state(),
+        "sheet_referral_urls": cached_referral_url_state(),
+        "referral_urls": referral_url_config_state([]),
     }
 
 
@@ -4057,6 +4197,7 @@ def app_state(output_root: Path, templates_dir: Path) -> dict[str, Any]:
         "gws_auth": auth_status,
         "accounts": accounts,
         "sheet": sheet,
+        "referral_urls": referral_url_config_state(sheet.get("accounts", [])),
         "post_sync_summary": post_sync_summary(accounts, bool(sheet.get("loaded_at"))),
         "drive_sync_summary": drive_sync_summary(output_root),
         "templates": list_templates(templates_dir),
@@ -4906,21 +5047,15 @@ def post_validation_issues(target: dict[str, Any], text: str) -> list[str]:
     if not normalized:
         issues.append(prefix + "投稿文が空です")
         return issues
-    referral = referral_url_for_target(target)
-    required_url = str(referral.get("url") or "")
     found_urls = urls_in_text(cleaned)
     has_placeholder = post_has_referral_placeholder(cleaned)
-    if required_url:
-        wrong_urls = [url for url in found_urls if url != required_url]
-        if wrong_urls:
-            issues.append(prefix + "正しい紹介URL以外のURLが含まれています: " + "、".join(wrong_urls[:3]))
-        if not has_placeholder and required_url not in found_urls:
-            issues.append(prefix + "CTAの【公式LINEURL】または正しい紹介URLがありません")
-    else:
-        if has_placeholder or found_urls:
-            issues.append(prefix + "公式LINE紹介URLを取得できないため、URLを確定できません")
-        else:
-            issues.append(prefix + "CTAの【公式LINEURL】または紹介URLがありません")
+    configured_url = valid_referral_url(referral_url_for_target(target).get("url"))
+    unexpected_urls = [url for url in found_urls if not configured_url or url != configured_url]
+    has_configured_url = bool(configured_url and found_urls and not unexpected_urls)
+    if unexpected_urls:
+        issues.append(prefix + "未登録の実URLが含まれています: " + "、".join(unexpected_urls[:3]))
+    if not has_placeholder and not has_configured_url:
+        issues.append(prefix + "CTAの【公式LINEURL】がありません")
     if re.search(r"[#＃*＊]", str(text or "")):
         issues.append(prefix + "Markdown装飾記号が残っています")
 
@@ -7519,7 +7654,11 @@ def collect_weekly_bulk_image_targets(output_root: Path, *, missing_only: bool =
                 continue
             image_path = image_path_for_slot(output_root, account_name, kind)
             if missing_only and image_path.exists() and image_path.stat().st_size > 0:
-                continue
+                source_paths = [image_path.parent / POST_FILENAMES[kind]]
+                image_mtime = image_path.stat().st_mtime
+                newest_source_mtime = max((path.stat().st_mtime for path in source_paths if path.exists()), default=0)
+                if image_mtime >= newest_source_mtime:
+                    continue
             targets.append(
                 {
                     "account_name": account_name,
@@ -9466,6 +9605,8 @@ class JmtyGuiHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "result": acknowledge_image_validation(payload)})
             elif parsed.path == "/api/sheet/reload":
                 self.send_json({"ok": True, "sheet": reload_sheet_state(self.output_root)})
+            elif parsed.path == "/api/referral-urls":
+                self.send_json({"ok": True, "referral_urls": save_referral_url_config(payload)})
             elif parsed.path == "/api/sheet/mapping":
                 self.send_json({"ok": True, "mapping": save_sheet_mapping(payload)})
             elif parsed.path == "/api/image-rules":
@@ -12631,6 +12772,88 @@ INDEX_HTML = r"""<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .referral-url-panel {
+      display: grid;
+      gap: 12px;
+    }
+    .referral-url-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+    }
+    .referral-url-stat {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      display: grid;
+      gap: 3px;
+    }
+    .referral-url-stat span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .referral-url-stat strong {
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1.2;
+    }
+    .referral-url-list {
+      display: grid;
+      gap: 8px;
+    }
+    .referral-url-row {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow-small);
+      padding: 10px;
+      display: grid;
+      grid-template-columns: minmax(180px, .72fr) repeat(2, minmax(220px, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .referral-url-account {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+      align-self: center;
+    }
+    .referral-url-account strong {
+      color: var(--text);
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+    .referral-url-account span {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .referral-url-field {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+    }
+    .referral-url-field-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-width: 0;
+    }
+    .referral-url-field-head span:first-child {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .referral-url-field input {
+      width: 100%;
+      min-width: 0;
+      font-size: 13px;
+    }
     .rewrite-live {
       display: grid;
       gap: 9px;
@@ -13299,7 +13522,7 @@ INDEX_HTML = r"""<!doctype html>
       .posts-edit-grid .sheet-edit-field.field-long {
         min-width: 380px;
       }
-      .sheet-row, .sheet-list-head { grid-template-columns: 1fr; }
+      .sheet-row, .sheet-list-head, .referral-url-row { grid-template-columns: 1fr; }
       .sheet-list-head { display: none; }
     }
     @media (max-width: 680px) {
@@ -13849,6 +14072,7 @@ INDEX_HTML = r"""<!doctype html>
       <nav class="top-view-tabs" aria-label="上位タブ">
         <button class="view-tab" data-view="dashboard" data-icon="dashboard" aria-selected="true">ダッシュボード</button>
         <button class="view-tab" data-view="posts" data-icon="article" aria-selected="false">投稿文管理</button>
+        <button class="view-tab" data-view="referrals" data-icon="link" aria-selected="false">紹介URL</button>
         <button class="view-tab" data-view="rotation" data-icon="sync_alt" aria-selected="false">地域・ランダム割当</button>
         <button class="view-tab" data-view="images" data-icon="image" aria-selected="false">画像生成</button>
         <button class="view-tab" data-view="prompts" data-icon="palette" aria-selected="false">画像プロンプト管理</button>
@@ -13865,6 +14089,7 @@ INDEX_HTML = r"""<!doctype html>
       <nav class="view-nav" aria-label="画面切り替え">
         <button class="view-tab" data-view="dashboard" data-icon="dashboard" aria-selected="true">ダッシュボード</button>
         <button class="view-tab" data-view="posts" data-icon="article" aria-selected="false">投稿文管理</button>
+        <button class="view-tab" data-view="referrals" data-icon="link" aria-selected="false">紹介URL</button>
         <button class="view-tab" data-view="rotation" data-icon="sync_alt" aria-selected="false">地域・ランダム割当</button>
         <button class="view-tab" data-view="images" data-icon="image" aria-selected="false">画像生成</button>
         <button class="view-tab" data-view="prompts" data-icon="palette" aria-selected="false">画像プロンプト管理</button>
@@ -13990,6 +14215,26 @@ INDEX_HTML = r"""<!doctype html>
             </details>
             <div id="post-sync-warning" class="post-sync-warning"></div>
             <div id="sheet-accounts" class="sheet-list"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="view-panel" data-view-panel="referrals">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title-block">
+              <h2 class="panel-title">紹介URL設定</h2>
+              <p class="panel-subtitle">アカウントごとの工場系・在宅系URLを保存します。</p>
+            </div>
+            <div class="panel-actions">
+              <span class="pill" id="referral-url-state">未読込</span>
+              <button id="reload-sheet-referrals" data-icon="cloud_sync">シート読込</button>
+              <button class="primary" id="save-referral-urls" data-icon="save">紹介URLを保存</button>
+            </div>
+          </div>
+          <div class="panel-body referral-url-panel">
+            <div class="referral-url-summary" id="referral-url-summary"></div>
+            <div class="referral-url-list" id="referral-url-list"></div>
           </div>
         </section>
       </section>
@@ -14559,10 +14804,11 @@ INDEX_HTML = r"""<!doctype html>
       appliedJobs: {},
       dismissedRewriteDrafts: {},
       jobViewOrigins: {},
-	      currentPostStyleSample: null,
+      currentPostStyleSample: null,
 	      currentView: "dashboard",
 	      dashboardQuery: "",
 	      drawerOpen: false,
+      referralDrafts: {},
       rotation: { field: "factory_region", pending: {}, draggingRow: null },
       filters: { accountQuery: "", accountStatus: "all", accountSort: "needs" },
       templateFilters: { query: "", kind: "all", preview: "all" },
@@ -15301,6 +15547,7 @@ INDEX_HTML = r"""<!doctype html>
       renderRotationReport(data);
       renderGwsAuth(data);
       renderSheet(data.sheet);
+      renderReferralUrls(data.referral_urls || data.sheet?.referral_urls || {});
       renderRegionBoard(data.sheet);
       renderAccounts(data.accounts);
       renderTemplates(data.templates);
@@ -17095,6 +17342,139 @@ INDEX_HTML = r"""<!doctype html>
           ${items.length > 12 ? `<span class="post-sync-chip">ほか ${items.length - 12}件</span>` : ""}
         </div>
       `;
+    }
+
+    function referralDraftKey(accountName) {
+      return normalizeAccountName(accountName).toLowerCase();
+    }
+
+    function referralResolvedByRow(config) {
+      const map = new Map();
+      (config?.resolved_accounts || []).forEach((item) => {
+        if (item?.row_number) map.set(String(item.row_number), item);
+      });
+      return map;
+    }
+
+    function referralCurrentValue(account, resolved, kind) {
+      const key = referralDraftKey(account.account_name);
+      const draft = state.referralDrafts[key];
+      if (draft && Object.prototype.hasOwnProperty.call(draft, kind)) return draft[kind];
+      const slotKey = kind === "factory" ? "factory" : "remote1";
+      return resolved?.slots?.[slotKey]?.url || "";
+    }
+
+    function referralStatusPill(value, pending = false) {
+      const text = String(value || "").trim();
+      if (pending) return `<span class="pill wait">保存待ち</span>`;
+      return text ? `<span class="pill ok">登録済み</span>` : `<span class="pill missing">プレースホルダー</span>`;
+    }
+
+    function renderReferralUrlRow(account, resolved) {
+      const factoryUrl = referralCurrentValue(account, resolved, "factory");
+      const remoteUrl = referralCurrentValue(account, resolved, "remote");
+      const key = referralDraftKey(account.account_name);
+      const draft = state.referralDrafts[key] || {};
+      const factoryPending = Object.prototype.hasOwnProperty.call(draft, "factory");
+      const remotePending = Object.prototype.hasOwnProperty.call(draft, "remote");
+      return `
+        <div class="referral-url-row" data-referral-account="${esc(account.account_name || "")}" data-referral-row="${esc(account.row_number || "")}">
+          <div class="referral-url-account">
+            <strong>${esc(account.account_name || "名称なし")}</strong>
+            <span>行 ${esc(account.row_number || "-")}${account.account_no ? ` / No ${esc(account.account_no)}` : ""}</span>
+          </div>
+          <label class="referral-url-field">
+            <span class="referral-url-field-head">
+              <span>工場系URL</span>
+              <span data-referral-status="factory">${referralStatusPill(factoryUrl, factoryPending)}</span>
+            </span>
+            <input type="url" inputmode="url" autocomplete="off" data-referral-kind="factory" value="${esc(factoryUrl)}" placeholder="【公式LINEURL】">
+          </label>
+          <label class="referral-url-field">
+            <span class="referral-url-field-head">
+              <span>在宅系URL</span>
+              <span data-referral-status="remote">${referralStatusPill(remoteUrl, remotePending)}</span>
+            </span>
+            <input type="url" inputmode="url" autocomplete="off" data-referral-kind="remote" value="${esc(remoteUrl)}" placeholder="【公式LINEURL】">
+          </label>
+        </div>
+      `;
+    }
+
+    function renderReferralUrls(config = {}) {
+      const root = $("referral-url-list");
+      if (!root) return;
+      const sheet = state.data?.sheet || {};
+      const accounts = sheet.accounts || [];
+      const summary = config.summary || {};
+      const configured = Number(summary.configured_accounts || 0);
+      const factoryCount = Number(summary.factory_count || 0);
+      const remoteCount = Number(summary.remote_count || 0);
+      $("referral-url-state").textContent = `${configured}件登録`;
+      $("referral-url-state").className = `pill ${configured ? "ok" : "missing"}`;
+      $("referral-url-summary").innerHTML = `
+        <div class="referral-url-stat"><span>登録アカウント</span><strong>${configured}</strong></div>
+        <div class="referral-url-stat"><span>工場系URL</span><strong>${factoryCount}</strong></div>
+        <div class="referral-url-stat"><span>在宅系URL</span><strong>${remoteCount}</strong></div>
+      `;
+      if (!sheet.loaded_at) {
+        root.innerHTML = `<div class="empty"><button class="primary" onclick="reloadSheet()" data-icon="cloud_sync">シート読込</button></div>`;
+        return;
+      }
+      if (!accounts.length) {
+        root.innerHTML = `<div class="empty">紹介URLを設定するアカウント行がありません。</div>`;
+        return;
+      }
+      const resolvedByRow = referralResolvedByRow(config);
+      root.innerHTML = accounts.map((account) => renderReferralUrlRow(account, resolvedByRow.get(String(account.row_number)))).join("");
+    }
+
+    function updateReferralDraft(input) {
+      const row = input.closest(".referral-url-row");
+      if (!row) return;
+      const accountName = row.dataset.referralAccount || "";
+      const kind = input.dataset.referralKind || "";
+      const key = referralDraftKey(accountName);
+      if (!state.referralDrafts[key]) state.referralDrafts[key] = {};
+      state.referralDrafts[key][kind] = input.value;
+      const status = row.querySelector(`[data-referral-status="${kind}"]`);
+      if (status) status.innerHTML = referralStatusPill(input.value, true);
+    }
+
+    function collectReferralUrlRecords() {
+      return Array.from(document.querySelectorAll(".referral-url-row")).map((row) => ({
+        account_name: row.dataset.referralAccount || "",
+        row_number: row.dataset.referralRow || "",
+        factory_url: row.querySelector('[data-referral-kind="factory"]')?.value?.trim() || "",
+        remote_url: row.querySelector('[data-referral-kind="remote"]')?.value?.trim() || "",
+      })).filter((record) => record.account_name);
+    }
+
+    async function saveReferralUrls(button = null) {
+      const records = collectReferralUrlRecords();
+      const factoryCount = records.filter((record) => record.factory_url).length;
+      const remoteCount = records.filter((record) => record.remote_url).length;
+      if (!confirm(`紹介URL設定を保存します。\n工場系 ${factoryCount}件 / 在宅系 ${remoteCount}件\n\n続行しますか？`)) return;
+      try {
+        if (button) {
+          button.disabled = true;
+          button.dataset.loading = "true";
+        }
+        await api("/api/referral-urls", {
+          method: "POST",
+          body: JSON.stringify({ records }),
+        });
+        state.referralDrafts = {};
+        await refresh();
+        toast("紹介URL設定を保存しました");
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("data-loading");
+        }
+      }
     }
 
     function accountRegionValue(account, field) {
@@ -19614,6 +19994,11 @@ INDEX_HTML = r"""<!doctype html>
     $("validate-all-posts").addEventListener("click", (event) => validateAllPosts(event.currentTarget));
     $("generate-all-posts").addEventListener("click", (event) => generateAllPosts(event.currentTarget));
     $("generate-failed-validation-posts").addEventListener("click", (event) => generateFailedValidationPosts(event.currentTarget));
+    $("reload-sheet-referrals").addEventListener("click", reloadSheet);
+    $("save-referral-urls").addEventListener("click", (event) => saveReferralUrls(event.currentTarget));
+    $("referral-url-list").addEventListener("input", (event) => {
+      if (event.target?.matches?.("[data-referral-kind]")) updateReferralDraft(event.target);
+    });
     $("regenerate-failed-validation-images").addEventListener("click", (event) => generateFailedValidationImages(event.currentTarget));
     $("close-sheet-editor").addEventListener("click", () => $("sheet-editor").close());
     $("close-rewrite-dialog").addEventListener("click", () => $("rewrite-dialog").close());
@@ -19652,7 +20037,7 @@ INDEX_HTML = r"""<!doctype html>
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="JMTY local GUI server")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--port", type=int, default=8788)
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--templates-dir", default=str(DEFAULT_TEMPLATES_DIR))
     parser.add_argument("--open", action="store_true", help="起動後にブラウザを開く")
@@ -19665,7 +20050,33 @@ def main(argv: list[str]) -> int:
     JmtyGuiHandler.templates_dir = Path(args.templates_dir).expanduser().resolve()
     load_persisted_jobs()
     cleanup_result = cleanup_cancelled_images()
-    server = ThreadingHTTPServer((args.host, args.port), JmtyGuiHandler)
+    requested_port = args.port
+    server = None
+    for candidate in range(requested_port, requested_port + 50):
+        try:
+            server = ThreadingHTTPServer((args.host, candidate), JmtyGuiHandler)
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                continue
+            raise
+        args.port = candidate
+        if candidate != requested_port:
+            print(
+                f"ポート {args.host}:{requested_port} は使用中だったため "
+                f"{candidate} で起動します。",
+                file=sys.stderr,
+            )
+        break
+    if server is None:
+        print(
+            f"ポート {requested_port} から 50 個を試しましたが空きが見つかりませんでした。",
+            file=sys.stderr,
+        )
+        print(
+            "別のポートで起動するには --port <番号> を指定してください。",
+            file=sys.stderr,
+        )
+        return 1
     url = f"http://{args.host}:{args.port}/"
     print(f"JMTY GUI: {url}")
     print(f"output_root: {JmtyGuiHandler.output_root}")
