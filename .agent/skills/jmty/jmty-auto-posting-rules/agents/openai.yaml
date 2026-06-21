@@ -1,0 +1,4 @@
+interface:
+  display_name: "JMTY Auto Posting Rules"
+  short_description: "ジモティ自動投稿ルールと送信手順"
+  default_prompt: "Use $jmty-auto-posting-rules to prepare and submit JMTY job posts using the approved spreadsheet rules."
