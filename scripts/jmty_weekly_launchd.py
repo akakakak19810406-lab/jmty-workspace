@@ -428,6 +428,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    print("[jmty-weekly-launchd] 週次自動化は一時的に無効化されています。中止要求に基づき終了します。", file=sys.stderr)
+    return 0
     args = parse_args(argv)
     try:
         if args.preflight_only:
