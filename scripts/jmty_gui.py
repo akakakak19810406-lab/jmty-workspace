@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import errno
@@ -6492,7 +6493,18 @@ def template_is_disallowed_for_image_generation(template: dict[str, Any]) -> boo
     return bool(DISALLOWED_IMAGE_TEMPLATE_PATTERN.search(haystack))
 
 
-def select_template_for_slot(templates_dir: Path, kind: str, post_text: str) -> dict[str, Any] | None:
+def image_template_usage_counts(output_root: Path) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for task in load_tasks(output_root):
+        if not isinstance(task, dict):
+            continue
+        template_name = clean_template_stem(str(task.get("prompt_template_name") or ""))
+        if template_name:
+            counts[template_name] += 1
+    return counts
+
+
+def select_template_for_slot(output_root: Path, templates_dir: Path, kind: str, post_text: str) -> dict[str, Any] | None:
     templates = [template for template in list_templates(templates_dir) if not template_is_disallowed_for_image_generation(template)]
     if not templates:
         return None
@@ -6500,7 +6512,19 @@ def select_template_for_slot(templates_dir: Path, kind: str, post_text: str) -> 
     candidates = [template for template in templates if str(template.get("kind") or "common") in allowed]
     if not candidates:
         candidates = [template for template in templates if str(template.get("kind") or "common") == "common"]
-    return secrets.SystemRandom().choice(candidates or templates)
+    pool = candidates or templates
+    usage_counts = image_template_usage_counts(output_root)
+    usage_by_template = [
+        (usage_counts.get(clean_template_stem(str(template.get("name") or template.get("filename") or "")), 0), template)
+        for template in pool
+    ]
+    min_usage = min((usage for usage, _ in usage_by_template), default=0)
+    least_used = [template for usage, template in usage_by_template if usage == min_usage] or pool
+    selected = dict(secrets.SystemRandom().choice(least_used))
+    selected["_selection_pool_size"] = len(pool)
+    selected["_selection_least_used_pool_size"] = len(least_used)
+    selected["_selection_usage_count"] = min_usage
+    return selected
 
 
 def selected_template_note(template: dict[str, Any] | None, kind: str) -> str:
@@ -6512,8 +6536,10 @@ def selected_template_note(template: dict[str, Any] | None, kind: str) -> str:
         "JMTY random image prompt selection",
         f"- Selected template: {name}",
         f"- Selected template kind: {template_kind}",
-        "- Selection pool: allowed raster/photo-style prompt templates for this slot",
-        "- Selection method: random choice at image-generation time",
+        f"- Selection pool: {int(template.get('_selection_pool_size') or 0)} allowed raster/photo-style prompt templates for this slot",
+        f"- Least-used random pool: {int(template.get('_selection_least_used_pool_size') or 0)} templates",
+        f"- Previous use count for selected template: {int(template.get('_selection_usage_count') or 0)}",
+        "- Selection method: random choice from least-used registered templates at image-generation time",
     ]
     return "\n".join(parts)
 
@@ -6681,7 +6707,7 @@ def build_codex_image_prompt(output_root: Path, templates_dir: Path, account_nam
     # 在宅用の画像内に在宅1・在宅2といった数値表記が混入するのを防ぐ強固なクレンジング
     image_post_text = image_post_text.replace("在宅1", "在宅").replace("在宅2", "在宅")
     
-    template = select_template_for_slot(templates_dir, kind, image_post_text or post_text)
+    template = select_template_for_slot(output_root, templates_dir, kind, image_post_text or post_text)
     template_text = sanitize_image_template_prompt(str(template.get("text") or "")) if template else ""
     template_note = selected_template_note(template, kind)
     reference_path = selected_template_reference_path(template, templates_dir)
