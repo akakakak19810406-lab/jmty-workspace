@@ -1,39 +1,124 @@
-Use case: ads-marketing
-Asset type: 1:1 Japanese job recruitment banner for Jimoty, PNG raster output
+用途: 求人広告（マーケティング）
+アセット: ジモティー掲載用 1:1 正方形の日本語求人バナー（PNG・ラスター画像）
 
-Primary request:
-Create a highly readable, high-impact Japanese recruitment banner for 「{{role_phrase}}」 around 「{{region}}」.
-The banner must sell the high-condition offer through two dominant money claims, not through factory imagery.
+メインリクエスト
 
-Main copy hierarchy:
-- Biggest text: 「月収40万円」
-- Equally strong second claim: 「入社祝い金160万円」
-- Large job/category headline: 「{{role_phrase}}」
-- Optional small chips only when useful: 「未経験OK」, 「安定収入」, 「すぐ働ける」
+「{{role_phrase}}」を募集する、{{region}} 周辺向けの、視認性が高くインパクトのある日本語求人バナーを作成してください。
 
-Visual style:
-Use flashy Japanese premium-ad styling with dense gold, red, black, and white contrast.
-Metallic gold lettering, deep red outlines, black shadows, bright lens flares, star sparkles, glossy highlights, confetti, and layered chrome-like decoration are encouraged.
-The overall impression should be premium, energetic, attention-grabbing, and income-focused.
+このバナーは、工場や作業風景ではなく、高待遇・高収入を強く訴求するデザインを重視してください。
 
-Layout:
-- Square 1:1 composition optimized for smartphone readability.
-- Place 「月収40万円」 and 「入社祝い金160万円」 as the two main blocks.
-- Role text and region text should support the money claims and should not compete with them.
-- Do not include small disclaimer text such as 「規定あり」 or 「案件により異なります」 in the image.
-- Factory, worker, workwear, helmet, machinery, warehouse, or person imagery is optional. Do not force it.
+コピーの優先順位
 
-Content rules:
-- Do not use strong CTA phrases such as 「クリックして」, 「ボタンで」, 「LINEで」, 「今すぐクリック」.
-- Do not include LINE URLs, QR codes, real company names, logos, watermarks, contact details, or fictional UI buttons.
-- Keep all visible Japanese text short and readable on phone.
+最も大きく目立たせる文字
 
-Strict visual avoid rules:
-- Do not create SVG, vector art, flat illustration, line art, icon-based design, Figma-style ad layout, Canva-style template, geometric-only composition, HTML, XML, or code-generated graphics.
-- The result should not look like a flat vector advertisement made only from shapes.
+「月収40万円」
 
-Output requirement:
-Generate a raster PNG image with crisp Japanese lettering and strong contrast.
-People / character direction:
-- If the image uses a person or character, use a female staff member / female character as the main foreground subject, unless the selected art style intentionally uses a gender-ambiguous abstract character. Do not over-emphasize workwear or factory realism; keep her ad-friendly, approachable, and visually appealing.
+同等の存在感で強調する文字
 
+「入社祝い金160万円」
+
+その次に目立たせる見出し
+
+「{{role_phrase}}」
+
+必要に応じて小さめのバッジとして追加
+
+「未経験OK」
+「安定収入」
+「すぐ働ける」
+デザイン・ビジュアル
+
+日本の高級感ある求人広告風デザインにしてください。
+
+以下のような豪華で目を引く演出を積極的に取り入れてください。
+
+ゴールド・赤・黒・白を基調とした配色
+金属感のあるゴールド文字
+深い赤色の縁取り
+力強い黒いドロップシャドウ
+レンズフレア
+星のきらめき
+光沢感のあるハイライト
+紙吹雪
+クローム調の装飾
+重厚感・高級感・勢いのある演出
+
+全体として、
+
+高級感
+エネルギッシュ
+一目で目を引く
+「高収入求人」であることが伝わる
+
+デザインにしてください。
+
+レイアウト
+アスペクト比 1:1
+スマートフォンでも非常に読みやすい構成
+「月収40万円」 と 「入社祝い金160万円」 を2大メイン要素として配置
+「{{role_phrase}}」 と 「{{region}}」 は補助的に配置し、金額より目立たせない
+禁止事項
+
+画像内に以下のような小さな注釈は入れないでください。
+
+「規定あり」
+「案件により異なります」
+
+また、以下も含めないでください。
+
+LINEのURL
+QRコード
+実在企業名
+ロゴ
+ウォーターマーク
+連絡先
+架空のUIボタン
+「クリックして」
+「ボタンで」
+「LINEで」
+「今すぐクリック」
+
+などの強いCTA（行動喚起）。
+
+画像内の日本語は、短く・太く・読みやすくしてください。
+
+ビジュアルで避ける表現
+
+以下のようなデザインにはしないでください。
+
+SVG風
+ベクターイラスト
+フラットデザイン
+線画のみ
+アイコン主体
+Figma風レイアウト
+Canvaテンプレート風
+幾何学図形だけで構成された広告
+HTML・XML・コード生成風グラフィック
+パチンコ風
+一万円札のお金が周りに散りばめられている
+
+図形だけで構成された平面的な広告ではなく、質感・立体感・迫力のあるラスター画像として仕上げてください。
+
+出力仕様
+PNG形式
+ラスター画像
+日本語文字は鮮明で読みやすく、誤字・文字切れがないこと
+コントラストが高く、サムネイル表示でも内容が伝わる品質
+人物・キャラクター
+
+人物を入れる場合は、
+
+女性スタッフ
+女性キャラクター
+
+をメインに配置してください。
+
+ただし、作業着や工場らしさを強調しすぎず、
+
+親しみやすい
+清潔感がある
+広告映えする
+好印象
+
+人物表現にしてください。

@@ -12490,6 +12490,20 @@ INDEX_HTML = r"""<!doctype html>
       cursor: progress;
       box-shadow: 0 0 0 3px rgba(11, 87, 208, .12);
     }
+    .template-new-kind-label {
+      display: inline-grid;
+      grid-template-columns: auto minmax(96px, 128px);
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .template-new-kind-label select {
+      min-height: 38px;
+      padding: 7px 28px 7px 10px;
+      font-size: 13px;
+    }
     .sr-only {
       position: absolute;
       width: 1px;
@@ -14435,6 +14449,13 @@ INDEX_HTML = r"""<!doctype html>
                 <h2 class="panel-title">画風テンプレ</h2>
                 <div class="panel-actions">
                   <span class="pill" id="template-count">0件</span>
+                  <label class="template-new-kind-label">分類
+                    <select id="new-template-kind">
+                      <option value="common">共通</option>
+                      <option value="factory">工場</option>
+                      <option value="remote">在宅</option>
+                    </select>
+                  </label>
                   <button id="new-template" data-icon="add">新規テンプレ</button>
                 </div>
               </div>
@@ -14465,6 +14486,13 @@ INDEX_HTML = r"""<!doctype html>
             <div class="panel-actions">
               <span class="pill" id="prompt-template-count">0件</span>
               <span class="pill" id="prompt-template-missing-count">見本未生成 0件</span>
+              <label class="template-new-kind-label">分類
+                <select id="new-template-main-kind">
+                  <option value="common">共通</option>
+                  <option value="factory">工場</option>
+                  <option value="remote">在宅</option>
+                </select>
+              </label>
               <button class="primary" id="new-template-main" data-icon="add">新規テンプレ</button>
             </div>
           </div>
@@ -19796,12 +19824,23 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    function openTemplateEditor(mode = "new") {
+    function selectedNewTemplateKind(sourceId = "new-template-main-kind") {
+      return $(sourceId)?.value || $("new-template-kind")?.value || "common";
+    }
+
+    function syncNewTemplateKind(value) {
+      ["new-template-kind", "new-template-main-kind"].forEach((id) => {
+        const select = $(id);
+        if (select) select.value = value || "common";
+      });
+    }
+
+    function openTemplateEditor(mode = "new", initialKind = "common") {
       if (mode === "new") {
         $("template-editor-title").textContent = "新規テンプレ";
         $("template-editor-subtitle").textContent = "見本画像や入力文から、画像生成に使う画風プロンプトを登録します。";
         $("template-name").value = "";
-        $("template-kind").value = "common";
+        $("template-kind").value = initialKind || "common";
         $("template-text").value = "";
         $("template-reference").value = "";
         $("template-preview").value = "";
@@ -19927,8 +19966,10 @@ INDEX_HTML = r"""<!doctype html>
     $("validate-all-checks").addEventListener("click", (event) => validateAllChecks(event.currentTarget));
     $("regenerate-failed-validation-posts").addEventListener("click", (event) => generateFailedValidationPosts(event.currentTarget));
     $("reset-job-logs").addEventListener("click", resetJobLogs);
-    $("new-template").addEventListener("click", () => openTemplateEditor("new"));
-    $("new-template-main").addEventListener("click", () => openTemplateEditor("new"));
+    $("new-template-kind").addEventListener("change", (event) => syncNewTemplateKind(event.target.value));
+    $("new-template-main-kind").addEventListener("change", (event) => syncNewTemplateKind(event.target.value));
+    $("new-template").addEventListener("click", () => openTemplateEditor("new", selectedNewTemplateKind("new-template-kind")));
+    $("new-template-main").addEventListener("click", () => openTemplateEditor("new", selectedNewTemplateKind("new-template-main-kind")));
     $("close-template-editor").addEventListener("click", () => $("template-editor").close());
     $("close-template-detail").addEventListener("click", () => $("template-detail").close());
     $("template-detail").addEventListener("close", () => {

@@ -1,41 +1,172 @@
-Use case: ads-marketing
-Asset type: 1:1 Japanese job recruitment banner for Jimoty, PNG raster image
+用途
 
-Reusable prompt:
-Create a high-impact Japanese recruitment banner with a bright jackpot / entertainment-ad mood, adapted into a trustworthy job post visual.
-The image should feel energetic, shiny, high-income oriented, and smartphone-readable, without becoming a CTA button ad.
+広告・マーケティング
 
-Visible main text:
-- Biggest text: 「月収40万円」
-- Second biggest text: 「入社祝い金160万円」
-- Supporting role/category text: 「{{role_phrase}}」
-- Small optional label: 「未経験OK」 or 「{{region}}周辺」
+アセット: ジモティー掲載用 1:1 正方形 日本語求人バナー（PNG・ラスター画像）
 
-Layout:
-- Square 1:1 composition with dense celebratory visual energy.
-- Make the two money claims the visual center. Both 「月収40万円」 and 「入社祝い金160万円」 must be large, crisp, and readable at thumbnail size.
-- Use bold layered typography, metallic shine, strong outlines, and high contrast.
-- Keep role and region secondary. Do not add long benefit lists.
-- Do not place 「規定あり」「案件により異なります」 or similar disclaimer text in the image.
+再利用可能なプロンプト
 
-Visual style:
-- Glossy Japanese entertainment-ad style: gold bevels, red outlines, black drop shadows, rim lights, starburst highlights, confetti, lens flares, sparkling reflections.
-- Background and decorative elements may follow the chosen style freely. Factory buildings, workers, workwear, helmets, machinery, and people are optional, not required.
-- If job-related elements appear, keep them subtle and secondary so the image does not feel too factory-heavy.
+高収入求人を力強く訴求する、日本のエンターテインメント広告（大当たり・ジャックポット風）の華やかさを取り入れつつ、信頼感のある求人広告として仕上げた、日本語求人バナーを作成してください。
 
-Text rules:
-- Keep all visible Japanese text short and hierarchy-driven.
-- Do not include LINE URLs, QR codes, company names, real brand logos, watermarks, or tiny unreadable text.
-- Do not use 「クリックして」「ボタンで」「LINEで」「今すぐ応募」 or similar action-button CTA wording as the main message.
-- Do not contradict the post. Use 「{{role_phrase}}」 and 「{{region}}」 only where dynamic text is needed.
+全体の印象は、
 
-Avoid:
-- SVG, vector art, flat illustration, line art, icon-only banners, diagram-like panels, Figma/Canva template aesthetics, or visuals made only from geometric shapes.
-- Low contrast, broken Japanese typography, warped letters, excessive tiny labels, company logos, QR codes, URLs, fake UI buttons.
+エネルギッシュ
+豪華
+高級感
+高収入を連想させる
+スマートフォンでも読みやすい
 
-Output requirements:
-- Generate a raster PNG image.
-- Prioritize crisp Japanese text, smartphone readability, and strong contrast.
-People / character direction:
-- If the image uses a person or character, use a female staff member / female character as the main foreground subject, unless the selected art style intentionally uses a gender-ambiguous abstract character. Do not over-emphasize workwear or factory realism; keep her ad-friendly, approachable, and visually appealing.
+ことを重視してください。
 
+ただし、CTA（ボタン広告）のようなデザインにはしないでください。
+
+表示するメインテキスト
+
+最も大きく表示
+
+「月収40万円」
+
+2番目に大きく表示
+
+「入社祝い金160万円」
+
+補助見出し
+
+「{{role_phrase}}」
+
+必要に応じて小さく表示
+
+「未経験OK」
+「{{region}}周辺」
+レイアウト
+アスペクト比 1:1
+お祝い感・高揚感のある賑やかな構成
+「月収40万円」 と 「入社祝い金160万円」 をデザインの中心に配置
+この2つはサムネイル表示でもはっきり読めるサイズ・太さ・コントラストにする
+立体感のある太字タイポグラフィ
+メタリックな光沢
+力強い縁取り
+高コントラスト
+
+「{{role_phrase}}」や「{{region}}」は補助情報として配置し、金額より目立たせないでください。
+
+長いメリット説明文は入れないでください。
+
+また、
+
+「規定あり」
+「案件により異なります」
+
+などの注釈は画像内に入れないでください。
+
+デザイン・ビジュアル
+
+日本の華やかなエンターテインメント広告のような演出を取り入れてください。
+
+例えば、
+
+スロットマシンで大当たりしている感じを表現
+ゴールドの立体文字
+赤い縁取り
+黒いドロップシャドウ
+リムライト
+放射状の光
+星形のきらめき
+紙吹雪
+レンズフレア
+光の反射
+豪華な装飾
+
+などを使用し、高級感と勢いを演出してください。
+
+背景や装飾は自由にデザインして構いません。
+
+工場・作業員・ヘルメット・作業着・機械・倉庫・人物などを入れても構いませんが、必須ではありません。
+
+仕事を連想させる要素を入れる場合も控えめにし、「工場の広告」に見えすぎないようにしてください。
+
+テキストに関するルール
+
+画像内の日本語は、
+
+短く
+太く
+読みやすく
+優先順位が明確
+
+になるようにしてください。
+
+以下は含めないでください。
+
+LINEのURL
+QRコード
+企業名
+実在ブランドロゴ
+ウォーターマーク
+小さすぎて読めない文字
+
+また、
+
+「クリックして」
+「ボタンで」
+「LINEで」
+「今すぐ応募」
+
+など、CTAボタンを連想させる表現は使用しないでください。
+
+動的テキストとして使用するのは、
+
+「{{role_phrase}}」
+「{{region}}」
+
+のみとし、求人内容と矛盾しないようにしてください。
+
+避けるデザイン
+
+以下のようなデザインにはしないでください。
+
+SVG風
+ベクターアート
+フラットデザイン
+線画のみ
+アイコン主体のバナー
+図解・インフォグラフィック風
+Figmaテンプレート風
+Canvaテンプレート風
+幾何学図形だけで構成されたデザイン
+コントラストが弱いデザイン
+崩れた日本語タイポグラフィ
+歪んだ文字
+小さな説明文を大量に配置したレイアウト
+企業ロゴ
+QRコード
+URL
+偽のUIボタン
+出力要件
+PNG形式
+ラスター画像
+日本語の文字は鮮明で読みやすいこと
+スマートフォンでの視認性を最優先
+高コントラストで、サムネイルでも内容が伝わる品質
+人物・キャラクター
+
+人物を配置する場合は、
+
+女性スタッフまたは女性キャラクターをメインにしてください。
+
+ただし、
+
+作業着
+工場
+現場感
+
+を過度に強調せず、
+
+親しみやすい
+清潔感がある
+広告映えする
+魅力的で好印象
+
+な人物表現にしてください。
+
+なお、作品コンセプトとして性別を限定しない抽象的なキャラクター表現を採用する場合は、その表現でも構いません。

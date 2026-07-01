@@ -1,41 +1,157 @@
-Use case: ads-marketing
-Asset type: 1:1 Japanese job recruitment banner for Jimoty
+ジモティー向け求人広告（1:1）画像生成プロンプト
 
-Create a high-impact Japanese recruitment banner in an intense printed manga magazine advertisement style.
-Use raster texture, dramatic contrast, bold typography, and a layout that stays readable on smartphone.
+用途： ジモティー掲載用の求人募集バナー（1:1）
 
-Main copy include:
-- Primary money headline: 「月収40万円」
-- Primary bonus headline: 「入社祝い金160万円」
-- Role headline: 「{{role_phrase}}」
-- Optional support copy: 「未経験OK」
-- Optional region/context label: 「{{region}}」
+スマートフォンでも一目で目を引く、週刊漫画誌の見開き広告のような圧倒的なインパクトを持つ、日本の求人広告バナーを作成してください。
 
-Visual style:
-- Dramatic manga / gekiga-inspired ad design with thick outlines, rough ink texture, halftone grain, paint splashes, speed lines, glow, sparks, and high-contrast lighting.
-- The background may be abstract, money-themed, city-like, poster-like, or job-relevant. It does not need to show a factory.
-- A person, worker, workwear, helmet, machinery, factory floor, or production line is optional. Do not force any of them.
-- Use strong red, yellow, black, and white palette with small accent colors when useful.
+メインテキスト
 
-Layout typography:
-- Square 1:1 composition designed for mobile readability.
-- Make 「月収40万円」 and 「入社祝い金160万円」 the two dominant elements.
-- Place 「{{role_phrase}}」 as a clear secondary headline.
-- Do not include 「規定あり」「案件により異なります」 or any disclaimer text in the image.
-- Text should be sharp, not warped, not misspelled, and not cut off at edges.
+以下の内容を必ず含めてください。
 
-Content rules:
-- Image must prioritize the offer itself: money claims, job type, beginner-friendly message.
-- Do not use 「クリックして」「ボタンで」「LINEで」 or similar action-button CTA wording.
-- Do not include LINE URLs, QR codes, real company names, watermarks, platform logos, or contact information.
-- Keep all Japanese text short, bold, and readable at thumbnail size.
+月収40万円（最も目立つ見出し）
+入社祝い金160万円（月収と同等に目立たせる）
+{{role_phrase}}（職種名）
+未経験OK
+{{region}}（地域名・任意）
+デザインテイスト
 
-Avoid:
-- SVG, vector art, flat illustration, line-art-only visuals, icon-only layouts, Figma/Canva-style geometric ad templates, or banners assembled only from shapes.
-- Tiny text, excessive benefit lists, low contrast, clean corporate design, cute mascot tone, QR codes, fake buttons, UI-like CTA areas, logos, watermarks, broken Japanese typography.
+日本の劇画・漫画雑誌広告風の迫力あるデザイン。
 
-Output requirement:
-Generate a raster PNG image. The final image should look like a dense, dramatic manga-style recruitment banner with crisp Japanese lettering.
-People / character direction:
-- If the image uses a person or character, use a female staff member / female character as the main foreground subject, unless the selected art style intentionally uses a gender-ambiguous abstract character. Do not over-emphasize workwear or factory realism; keep her ad-friendly, approachable, and visually appealing.
+以下の表現を積極的に取り入れてください。
 
+太い縁取り
+荒いインク表現
+網点（ハーフトーン）
+インク飛沫
+スピード線
+強い発光演出
+火花・エフェクト
+強烈な明暗表現
+印刷された漫画広告のような質感
+ラスター（ビットマップ）ベースの高密度デザイン
+
+背景は以下のいずれでも構いません。
+
+お金をイメージした背景
+都市・夜景
+抽象的なエネルギッシュ背景
+ポスター風
+求人広告らしい演出
+
+※工場を描く必要はありません。
+
+人物
+
+人物を入れる場合は、
+
+親しみやすく魅力的な女性スタッフ・女性キャラクターをメインに配置してください。
+
+ただし、
+
+ヘルメット
+工場作業着
+機械設備
+生産ライン
+
+などを無理に描写する必要はありません。
+
+リアルな工場表現よりも、広告として目を引くビジュアルを優先してください。
+
+配色
+
+以下を基調にしてください。
+
+赤
+黄色
+黒
+白
+
+必要に応じてアクセントカラーを少量使用してください。
+
+レイアウト
+
+スマートフォンで見やすい**正方形（1:1）**レイアウト。
+
+以下の優先順位で文字を配置してください。
+
+① 「月収40万円」（最大級）
+
+② 「入社祝い金160万円」（最大級）
+
+③ 「{{role_phrase}}」（職種名）
+
+④ 「未経験OK」
+
+⑤ 「{{region}}」
+
+テキストルール
+
+日本語は
+
+太字
+高コントラスト
+シャープ
+読みやすい
+
+ことを重視してください。
+
+文字は
+
+歪ませない
+誤字を出さない
+画像の端で切らない
+
+ようにしてください。
+
+コンテンツ方針
+
+広告では以下を最優先してください。
+
+高収入
+入社祝い金
+職種
+未経験歓迎
+使用禁止
+
+画像内には以下を入れないでください。
+
+「規定あり」
+「案件により異なります」
+「クリックして」
+「ボタンはこちら」
+「LINEはこちら」
+LINE URL
+QRコード
+実在企業名
+ロゴ
+ウォーターマーク
+プラットフォームロゴ
+連絡先
+避ける表現
+
+以下のようなデザインは避けてください。
+
+SVG風
+ベクターイラスト
+フラットデザイン
+線画のみ
+アイコンだけの構成
+Canva・Figma風テンプレート
+幾何学図形だけで構成された広告
+小さすぎる文字
+情報量が多すぎる箇条書き
+コントラストが弱いデザイン
+企業パンフレットのようなシンプルデザイン
+可愛いマスコット中心
+UI風ボタン
+QRコード
+ロゴ
+不自然な日本語フォント
+誤字・文字崩れ
+出力
+
+PNG形式（ラスター画像）
+
+最終的な画像は、
+
+「週刊漫画誌に掲載されている劇画調の求人広告」のような、情報密度が高く、力強く、圧倒的な存在感を持つデザインにしてください。
